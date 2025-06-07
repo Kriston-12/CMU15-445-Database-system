@@ -16,7 +16,11 @@ namespace bustub {
 
 /** @brief Parameterized constructor. */
 template <typename KeyType>
-HyperLogLog<KeyType>::HyperLogLog(int16_t n_bits) : cardinality_(0) {}
+HyperLogLog<KeyType>::HyperLogLog(int16_t n_bits) : cardinality_(0) {
+  numRegisters = 1 << n_bits;
+  totalBits = n_bits;
+  registers.resize(numRegisters, 0);
+}
 
 /**
  * @brief Function that computes binary.
@@ -39,7 +43,17 @@ auto HyperLogLog<KeyType>::ComputeBinary(const hash_t &hash) const -> std::bitse
 template <typename KeyType>
 auto HyperLogLog<KeyType>::PositionOfLeftmostOne(const std::bitset<BITSET_CAPACITY> &bset) const -> uint64_t {
   /** @TODO(student) Implement this function! */
-  return 0;
+  uint64_t pos = 1;
+  // From left to right
+  for (int i = BITSET_CAPACITY - totalBits; i >= 0; --i) {
+    if (bset[i]) {
+      break;
+    }
+    else {
+      pos++;
+    }
+  }
+  return pos;
 }
 
 /**
