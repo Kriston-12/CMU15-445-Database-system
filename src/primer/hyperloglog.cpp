@@ -18,7 +18,7 @@ namespace bustub {
 template <typename KeyType>
 HyperLogLog<KeyType>::HyperLogLog(int16_t n_bits) : cardinality_(0) {
   numRegisters = 1 << n_bits;
-  totalBits = n_bits;
+  indexBits = n_bits;
   registers.resize(numRegisters, 0);
 }
 
@@ -31,7 +31,22 @@ HyperLogLog<KeyType>::HyperLogLog(int16_t n_bits) : cardinality_(0) {
 template <typename KeyType>
 auto HyperLogLog<KeyType>::ComputeBinary(const hash_t &hash) const -> std::bitset<BITSET_CAPACITY> {
   /** @TODO(student) Implement this function! */
-  return {0};
+  // std::bitset<BITSET_CAPACITY> rlt;
+  // int i = BITSET_CAPACITY - 1;
+  // while (hash) {
+  //   if (hash % 2) {
+  //     rlt[i] = 1;
+  //   }
+  //   else {
+  //     rlt[i] = 0;
+  //   }
+  //   hash /= 2;
+  //   i--;
+  // }
+
+  // return rlt;
+
+  return std::bitset<BITSET_CAPACITY>(hash);
 }
 
 /**
@@ -45,7 +60,7 @@ auto HyperLogLog<KeyType>::PositionOfLeftmostOne(const std::bitset<BITSET_CAPACI
   /** @TODO(student) Implement this function! */
   uint64_t pos = 1;
   // From left to right
-  for (int i = BITSET_CAPACITY - totalBits; i >= 0; --i) {
+  for (int i = BITSET_CAPACITY - indexBits; i >= 0; --i) {
     if (bset[i]) {
       break;
     }
@@ -64,6 +79,13 @@ auto HyperLogLog<KeyType>::PositionOfLeftmostOne(const std::bitset<BITSET_CAPACI
 template <typename KeyType>
 auto HyperLogLog<KeyType>::AddElem(KeyType val) -> void {
   /** @TODO(student) Implement this function! */
+  size_t hash = CalculateHash(val);
+  std::bitset<BITSET_CAPACITY> binary = ComputeBinary(hash);
+  
+  int64_t index = (binary >> (BITSET_CAPACITY - indexBits)).to_ullong();
+  uint64_t pLeftOne = PositionOfLeftmostOne(binary);
+
+  registers[index] = std::max(pLeftOne, registers[index]);
 }
 
 /**
@@ -72,6 +94,13 @@ auto HyperLogLog<KeyType>::AddElem(KeyType val) -> void {
 template <typename KeyType>
 auto HyperLogLog<KeyType>::ComputeCardinality() -> void {
   /** @TODO(student) Implement this function! */
+  double divisor = 0.0;
+  for (size_t i = 0; i < numRegisters; i++) {
+    divisor += pow(2, -static_cast<int>(registers[i]));
+  }
+
+  double m = static_cast<double>(numRegisters);
+  cardinality_ = floor(CONSTANT * m * m / divisor);
 }
 
 template class HyperLogLog<int64_t>;
