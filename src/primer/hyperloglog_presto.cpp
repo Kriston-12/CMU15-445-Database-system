@@ -56,9 +56,9 @@ auto HyperLogLogPresto<KeyType>::AddElem(KeyType val) -> void {
   size_t contiZeros = ComputeContinuousZeros(entireBinary);
   std::bitset<TOTAL_BUCKET_SIZE> contiZerosBinary = ComputeBinary<TOTAL_BUCKET_SIZE>(contiZeros);
 
-  std::bitset<OVERFLOW_BUCKET_SIZE> overFlowBinary = (contiZerosBinary >> DENSE_BUCKET_SIZE);
+  std::bitset<OVERFLOW_BUCKET_SIZE> overFlowBinary = (contiZerosBinary >> DENSE_BUCKET_SIZE); // First 3 bits will be part of overflow
   // std::bitset<DENSE_BUCKET_SIZE> denseBinary = (contiZerosBinary & 0b1111); // the expression below is more generalized
-  std::bitset<DENSE_BUCKET_SIZE> denseBinary = contiZerosBinary & std::bitset<TOTAL_BUCKET_SIZE>((1 << DENSE_BUCKET_SIZE) - 1);
+  std::bitset<DENSE_BUCKET_SIZE> denseBinary = contiZerosBinary & std::bitset<TOTAL_BUCKET_SIZE>((1 << DENSE_BUCKET_SIZE) - 1); // Last 4 bits will be part of dense
 
   dense_bucket_[bucketIndex] = denseBinary;
 
@@ -74,7 +74,24 @@ auto HyperLogLogPresto<KeyType>::AddElem(KeyType val) -> void {
 template <typename T>
 auto HyperLogLogPresto<T>::ComputeCardinality() -> void {
   /** @TODO(student) Implement this function! */
-  
+  double sum = 0.0;
+  for (size_t i = 0; i < numRegisters; ++i) {
+    uint8_t denseVal = dense_bucket_[i].to_ulong();
+
+    // Might not have this, if not set it to 0, else set it the val
+    uint8_t overflowVal = 0;
+    if (overflow_bucket_.count(i)) {
+      overflowVal = overflow_bucket_[i].to_ulong();
+    }
+
+    uint8_t totalVal = (overflowVal << DENSE_BUCKET_SIZE) | denseVal;
+
+    sum += std::pow(2.0, -static_cast<int>(totalVal));
+  }
+
+  double estimate = CONSTANT * numRegisters * numRegisters / sum;
+
+  cardinality_ = static_cast<uint64_t>(std::floor(estimate));
 }
 
 template class HyperLogLogPresto<int64_t>;
