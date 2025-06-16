@@ -73,6 +73,9 @@ class HyperLogLog {
   size_t cardinality_;
 
   /** @todo (student) can add their data structures that support HyperLogLog */
+  size_t numRegisters;
+  std::vector<uint64_t> registers;
+  int16_t indexBits;
 };
 
 }  // namespace bustub
