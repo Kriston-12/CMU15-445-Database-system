@@ -88,13 +88,15 @@ class HyperLogLogPresto {
   /** @brief Structure holding overflow buckets. */
   std::unordered_map<uint16_t, std::bitset<OVERFLOW_BUCKET_SIZE>> overflow_bucket_;
 
+  auto ComputeContinuousZeros(const std::bitset<64>& bitset) -> std::size_t;
+
   /** @brief Storing cardinality value */
   uint64_t cardinality_;
 
   // TODO(student) - can add more data structures as required
   int16_t leadingBits;
   std::vector<uint64_t> registers;
-  size_t numRegisters;
+  size_t numRegisters{0};
 };
 
 }  // namespace bustub

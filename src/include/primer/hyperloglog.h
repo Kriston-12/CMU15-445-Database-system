@@ -75,7 +75,8 @@ class HyperLogLog {
   /** @todo (student) can add their data structures that support HyperLogLog */
   size_t numRegisters;
   std::vector<uint64_t> registers;
-  int16_t indexBits;
+  int16_t indexBits; // This variable is to check if n_bits passed to the constructor is 0 or no
+  
 };
 
 }  // namespace bustub

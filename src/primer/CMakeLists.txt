@@ -9,12 +9,11 @@ add_library(
   trie.cpp
   trie_store.cpp)
 
-# 👇 Add this line to fix include path issue
+# Add this for bustub_primer
 target_include_directories(bustub_primer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
     /home/kris/CMU15-445/CMU15-445-Database-system/third_party/fmt/include
 )
-
 
 
 set(ALL_OBJECT_FILES

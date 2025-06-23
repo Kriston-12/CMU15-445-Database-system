@@ -11,12 +11,16 @@
 //===----------------------------------------------------------------------===//
 
 #include "primer/hyperloglog.h"
+#include <iostream>
 
 namespace bustub {
 
 /** @brief Parameterized constructor. */
 template <typename KeyType>
 HyperLogLog<KeyType>::HyperLogLog(int16_t n_bits) : cardinality_(0) {
+  if (n_bits < 0 || n_bits >= 64) {
+    return; // cannot have n_bits < 0
+  }
   numRegisters = 1 << n_bits;
   indexBits = n_bits;
   registers.resize(numRegisters, 0);
@@ -58,16 +62,20 @@ auto HyperLogLog<KeyType>::ComputeBinary(const hash_t &hash) const -> std::bitse
 template <typename KeyType>
 auto HyperLogLog<KeyType>::PositionOfLeftmostOne(const std::bitset<BITSET_CAPACITY> &bset) const -> uint64_t {
   /** @TODO(student) Implement this function! */
-  uint64_t pos = 1;
+  uint8_t pos = 1;
+  int start = BITSET_CAPACITY - 1 - indexBits;
+  // assert(start <= 63);
+  // std::cout << start << std::endl;
   // From left to right
-  for (int i = BITSET_CAPACITY - indexBits; i >= 0; --i) {
+  for (int i = start; i >= 0; --i) {
     if (bset[i]) {
       break;
     }
-    else {
-      pos++;
-    }
+    pos++;
   }
+
+  pos = std::min(pos, static_cast<uint8_t>(64));
+
   return pos;
 }
 
@@ -94,10 +102,16 @@ auto HyperLogLog<KeyType>::AddElem(KeyType val) -> void {
 template <typename KeyType>
 auto HyperLogLog<KeyType>::ComputeCardinality() -> void {
   /** @TODO(student) Implement this function! */
+  if (numRegisters == 0) {
+    return;
+  }
+  
   double divisor = 0.0;
   for (size_t i = 0; i < numRegisters; i++) {
     divisor += pow(2, -static_cast<int>(registers[i]));
   }
+
+  
 
   double m = static_cast<double>(numRegisters);
   cardinality_ = floor(CONSTANT * m * m / divisor);
