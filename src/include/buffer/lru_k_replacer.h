@@ -18,23 +18,49 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
-
+#include <queue>
 #include "common/config.h"
 #include "common/macros.h"
+#include <deque>
+// #include <limits>
+#include <map>
 
 namespace bustub {
 
 enum class AccessType { Unknown = 0, Lookup, Scan, Index };
 
 class LRUKNode {
- private:
+  public:
+  explicit LRUKNode(size_t k) : k_(k) {}
+
+  void frameRecordAccess(size_t timestamp) {
+    if (history.size() == k_) {
+      history.pop_front(); // if we already have kth recent access, pop the front access
+    }
+    history.push_back(timestamp);
+  }
+
+  bool alreadyHasKAccess() const {return history.size() >= k_;}
+
+  size_t getEarliestTime() {return history.front();}
+
+  size_t getKDis() const {
+    if (alreadyHasKAccess()) {
+      return history.front();
+    }
+    return std::numeric_limits<size_t>::max();
+  }
+
+
+  private:
   /** History of last seen K timestamps of this page. Least recent timestamp stored in front. */
   // Remove maybe_unused if you start using them. Feel free to change the member variables as you want.
 
-  [[maybe_unused]] std::list<size_t> history_;
-  [[maybe_unused]] size_t k_;
-  [[maybe_unused]] frame_id_t fid_;
-  [[maybe_unused]] bool is_evictable_{false};
+  // std::list<size_t> history; // memory of std::list is not continuous, not cache friendly 
+  std::deque<size_t> history;
+  size_t k_;
+  frame_id_t fid_;
+  bool isEvictable{false};
 };
 
 /**
@@ -74,12 +100,43 @@ class LRUKReplacer {
  private:
   // TODO(student): implement me! You can replace these member variables as you like.
   // Remove maybe_unused if you start using them.
-  [[maybe_unused]] std::unordered_map<frame_id_t, LRUKNode> node_store_;
-  [[maybe_unused]] size_t current_timestamp_{0};
-  [[maybe_unused]] size_t curr_size_{0};
-  [[maybe_unused]] size_t replacer_size_;
-  [[maybe_unused]] size_t k_;
-  [[maybe_unused]] std::mutex latch_;
+
+  size_t current_timestamp_{0};
+  size_t curr_size_{0};
+  size_t replacer_size_;
+  size_t k_;
+  std::mutex latch_;
+
+  std::unordered_map<frame_id_t, LRUKNode> node_store_;
+  std::unordered_map<size_t, frame_id_t> under_k_map_; // maps sorted based on size_t -- its earliest access time. Key=earliest acces time, Value=frameID
+  std::unordered_map<size_t, frame_id_t> k_dist_map_;
+  // // index map to let the real map to get the real node from its value, according to the value--std::Multimap<>::iterator, 
+  // //
+  std::unordered_map<frame_id_t, std::map<size_t, frame_id_t>::iterator> under_k_index;  
+  std::unordered_map<frame_id_t, std::map<size_t, frame_id_t>::iterator> k_dist_index;
+
+  void insertToQueue(frame_id_t fid) {
+    LRUKNode &node = node_store_[fid];
+    size_t key = node.getEarliestTime();
+    if (node.alreadyHasKAccess()) {
+      // insert wil return a map interator that corresponds to the position in the map, bc k_dist_map is sorted, we could efficiently just kick out of the first element when we need to evict
+      
+    }
+    else {
+      
+    }
+  }
+
+  void eraseFromQueue(frame_id_t fid) {
+    if (under_k_index.count(fid)) {
+      under_k_map_.erase(under_k_index[fid]);
+      under_k_index.erase(fid);
+    }
+    else if (k_dist_index.count(fid)) {
+      k_dist_map_.erase(k_dist_index[fid]);
+      k_dist_index.erase(fid);
+    }
+  }
 };
 
 }  // namespace bustub

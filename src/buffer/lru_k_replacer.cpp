@@ -54,7 +54,7 @@ auto LRUKReplacer::Evict() -> std::optional<frame_id_t> { return std::nullopt; }
  * @param access_type type of access that was received. This parameter is only needed for
  * leaderboard tests.
  */
-void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType access_type) {}
+void LRUKReplacer::RecordAccess(frame_id_t frame_id, AccessType access_type) {}
 
 /**
  * TODO(P1): Add implementation
@@ -73,7 +73,21 @@ void LRUKReplacer::RecordAccess(frame_id_t frame_id, [[maybe_unused]] AccessType
  * @param frame_id id of frame whose 'evictable' status will be modified
  * @param set_evictable whether the given frame is evictable or not
  */
-void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {}
+void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
+    if (node_store_.count(frame_id) == 0) {
+        return;
+    }
+
+    LRUKNOde &node = node_store_[frame_id];
+    if (node.isEvictable == set_evictable) {
+        return;
+    }
+    if (set_evictable) {
+        cur_size_++;
+        node.isEvictable = true;
+        
+    }
+}
 
 /**
  * TODO(P1): Add implementation
