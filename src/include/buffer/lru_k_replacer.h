@@ -23,7 +23,7 @@
 #include "common/macros.h"
 #include <deque>
 // #include <limits>
-#include <map>
+// #include <map>
 
 namespace bustub {
 
@@ -38,19 +38,28 @@ class LRUKNode {
       history.pop_front(); // if we already have kth recent access, pop the front access
     }
     history.push_back(timestamp);
+    isRemoved = false;
   }
 
   bool alreadyHasKAccess() const {return history.size() >= k_;}
 
   size_t getEarliestTime() {return history.front();}
 
-  size_t getKDis() const {
-    if (alreadyHasKAccess()) {
-      return history.front();
-    }
-    return std::numeric_limits<size_t>::max();
+  // size_t getKDis() const {
+  //   if (alreadyHasKAccess()) {
+  //     return history.front();
+  //   }
+  //   return std::numeric_limits<size_t>::max();
+  // }
+
+  void reset() {
+    isEvictable = false;
+    isRemoved = true;
+    std::deque<size_t>().swap(history);
   }
 
+  bool isEvictable{false};
+  bool isRemoved{false};
 
   private:
   /** History of last seen K timestamps of this page. Least recent timestamp stored in front. */
@@ -60,7 +69,7 @@ class LRUKNode {
   std::deque<size_t> history;
   size_t k_;
   frame_id_t fid_;
-  bool isEvictable{false};
+  
 };
 
 /**
@@ -77,6 +86,7 @@ class LRUKNode {
 class LRUKReplacer {
  public:
   explicit LRUKReplacer(size_t num_frames, size_t k);
+  
 
   DISALLOW_COPY_AND_MOVE(LRUKReplacer);
 
@@ -108,35 +118,8 @@ class LRUKReplacer {
   std::mutex latch_;
 
   std::unordered_map<frame_id_t, LRUKNode> node_store_;
-  std::unordered_map<size_t, frame_id_t> under_k_map_; // maps sorted based on size_t -- its earliest access time. Key=earliest acces time, Value=frameID
-  std::unordered_map<size_t, frame_id_t> k_dist_map_;
-  // // index map to let the real map to get the real node from its value, according to the value--std::Multimap<>::iterator, 
-  // //
-  std::unordered_map<frame_id_t, std::map<size_t, frame_id_t>::iterator> under_k_index;  
-  std::unordered_map<frame_id_t, std::map<size_t, frame_id_t>::iterator> k_dist_index;
-
-  void insertToQueue(frame_id_t fid) {
-    LRUKNode &node = node_store_[fid];
-    size_t key = node.getEarliestTime();
-    if (node.alreadyHasKAccess()) {
-      // insert wil return a map interator that corresponds to the position in the map, bc k_dist_map is sorted, we could efficiently just kick out of the first element when we need to evict
-      
-    }
-    else {
-      
-    }
-  }
-
-  void eraseFromQueue(frame_id_t fid) {
-    if (under_k_index.count(fid)) {
-      under_k_map_.erase(under_k_index[fid]);
-      under_k_index.erase(fid);
-    }
-    else if (k_dist_index.count(fid)) {
-      k_dist_map_.erase(k_dist_index[fid]);
-      k_dist_index.erase(fid);
-    }
-  }
+  std::vector<LRUKNode> frames;
+  
 };
 
 }  // namespace bustub
