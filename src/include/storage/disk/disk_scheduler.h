@@ -66,7 +66,7 @@ class DiskScheduler {
    *
    * @return std::promise<bool>
    */
-  auto CreatePromise() -> DiskSchedulerPromise { return {}; };
+  auto CreatePromise() -> DiskSchedulerPromise { return {}; };  // return {} is actually return DiskSchedulerPromise{}. {} 会调用default constructor
 
   /**
    * @brief Deallocates a page on disk.

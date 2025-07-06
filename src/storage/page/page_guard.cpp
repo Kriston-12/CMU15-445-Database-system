@@ -36,8 +36,14 @@ ReadPageGuard::ReadPageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> fra
       replacer_(std::move(replacer)),
       bpm_latch_(std::move(bpm_latch)),
       disk_scheduler_(std::move(disk_scheduler)) {
-  UNIMPLEMENTED("TODO(P1): Add implementation.");
+  // UNIMPLEMENTED("TODO(P1): Add implementation.");
+
+  frame_->rwlatch_.lock();
+  frame_->pin_count_++;
+  replacer_->SetEvictable(frame_->frame_id_, false);
+  is_valid_ == true;
 }
+
 
 /**
  * @brief The move constructor for `ReadPageGuard`.
