@@ -60,7 +60,17 @@ ReadPageGuard::ReadPageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> fra
  *
  * @param that The other page guard.
  */
-ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept {}
+ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept {
+  page_id_ = that.page_id_;
+  frame_ = std::move(that.frame_);
+  bpm_latch_ = std::move(that.bpm_latch_);
+  replacer_ = std::move(that.replacer_);
+  is_valid_ = that.is_valid_;
+  that.is_valid_ = false;
+  that.bpm_latch_ = nullptr;
+  that.frame_ = nullptr;
+  that.replacer_ = nullptr;
+}
 
 /**
  * @brief The move assignment operator for `ReadPageGuard`.
@@ -79,7 +89,21 @@ ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept {}
  * @param that The other page guard.
  * @return ReadPageGuard& The newly valid `ReadPageGuard`.
  */
-auto ReadPageGuard::operator=(ReadPageGuard &&that) noexcept -> ReadPageGuard & { return *this; }
+auto ReadPageGuard::operator=(ReadPageGuard &&that) noexcept -> ReadPageGuard & { 
+  if (this != &that) {
+    this->Drop();
+    page_id_ = that.page_id_;
+    bpm_latch_ = std::move(that.bpm_latch_);
+    frame_ = std::move(that.frame_);
+    replacer_ = std::move(that.replacer_);
+    is_valid_ = that.is_valid_;
+    that.is_valid_ = false;
+    that.bpm_latch_ = nullptr;
+    that.frame_ = nullptr;
+    that.replacer_ = nullptr;
+  }
+  return *this; 
+}
 
 /**
  * @brief Gets the page ID of the page this guard is protecting.
@@ -123,7 +147,16 @@ void ReadPageGuard::Flush() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
  *
  * TODO(P1): Add implementation.
  */
-void ReadPageGuard::Drop() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+void ReadPageGuard::Drop() { 
+   if (is_valid_) {
+    frame_->rwlatch_.unlock();
+    frame_->pin_count_--;
+    this->is_valid_ = false;
+    if ((frame_->pin_count_) == 0) {
+      replacer_->SetEvictable(frame_->frame_id_, true);
+    }
+  }
+ }
 
 /** @brief The destructor for `ReadPageGuard`. This destructor simply calls `Drop()`. */
 ReadPageGuard::~ReadPageGuard() { Drop(); }
