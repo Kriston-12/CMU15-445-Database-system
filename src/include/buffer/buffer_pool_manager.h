@@ -17,6 +17,7 @@
 #include <shared_mutex>
 #include <unordered_map>
 #include <vector>
+#include <optional>
 
 #include "buffer/lru_k_replacer.h"
 #include "common/config.h"
@@ -95,6 +96,8 @@ class FrameHeader {
    * currently storing. This might allow you to skip searching for the corresponding (page ID, frame ID) pair somewhere
    * else in the buffer pool manager...
    */
+
+  std::optional<page_id_t> page_id_;  // this is the page id the frame stores 
 };
 
 /**

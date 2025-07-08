@@ -31,7 +31,7 @@ LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : replacer_size_(num_fra
     for (size_t i = 0; i < num_frames; ++i) {
         frames.emplace_back(k);
     }
-    std::cout << "-----------------initialization------------------" << std::endl;
+    // std::cout << "-----------------initialization------------------" << std::endl;
 }
 
 /**
@@ -55,18 +55,19 @@ auto LRUKReplacer::Evict() -> std::optional<frame_id_t> {
     size_t maxDist = std::numeric_limits<size_t>::max();  // This is for frames with K access
     bool underK = true;
 
+    // std::scoped_lock lock(latch_); // This lock is too coarse 
     for (size_t i = 0; i < replacer_size_; ++i) {
         auto &frame = frames[i];
+        std::scoped_lock lock(frame.node_latch);
         if (!frame.isEvictable || frame.isRemoved) {continue;}
-        std::scoped_lock lock(latch_);
-        if (!frame.alreadyHasKAccess()) {
+        if (underK && !frame.alreadyHasKAccess()) {
             if (frame.getEarliestTime() < earliestKInf) {
                 earliestKInf = frame.getEarliestTime();
                 victim = i;
             }
             underK = false;
         }
-        else if (underK) {
+        else {
             if (frame.getEarliestTime() < maxDist) {
                 maxDist = frame.getEarliestTime();
                 victim = i;
@@ -79,6 +80,7 @@ auto LRUKReplacer::Evict() -> std::optional<frame_id_t> {
     }
 
     // node_store_.erase(victim);
+    std::scoped_lock lock(frames[victim].node_latch);
     frames[victim].reset();
     curr_size_--;
     return victim;
@@ -99,8 +101,9 @@ auto LRUKReplacer::Evict() -> std::optional<frame_id_t> {
  */
 void LRUKReplacer::RecordAccess(frame_id_t frame_id, AccessType access_type) {
     // LRUKNode& frame = node_store_[frame_id];
+    // std::scoped_lock lock(latch_); // This lock is too coarse
     LRUKNode& frame = frames[frame_id];
-    std::scoped_lock lock(latch_);
+    std::scoped_lock lock(frame.node_latch);
     frame.frameRecordAccess(current_timestamp_++);
     // curr_size_++;
 }
@@ -156,16 +159,14 @@ void LRUKReplacer::SetEvictable(frame_id_t frame_id, bool set_evictable) {
  * @param frame_id id of frame to be removed
  */
 void LRUKReplacer::Remove(frame_id_t frame_id) {
-    if (frames[frame_id].isRemoved) {
-        return;
-    }
-    // LRUKNode& frame = node_store_[frame_id];
     LRUKNode& frame = frames[frame_id];
-    if (!frame.isEvictable) {
+    std::scoped_lock lock(frame.node_latch);
+    if (frame.isRemoved || !frame.isEvictable) {
         return;
     }
+
     // node_store_.erase(frame_id);  // Just clear the history, will reuse the frame in frames
-    std::scoped_lock lock(latch_);
+    // std::scoped_lock lock(latch_); // global lock could not be here 
     frame.reset();
     curr_size_--;
 }

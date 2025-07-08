@@ -32,6 +32,29 @@ enum class AccessType { Unknown = 0, Lookup, Scan, Index };
 class LRUKNode {
   public:
   explicit LRUKNode(size_t k) : k_(k) {}
+  // Mannually implement shift constructor and opeartor, as i added a fine-grained mutex in LRUKNode, 
+  LRUKNode(const LRUKNode &) = delete;
+  LRUKNode &operator=(const LRUKNode &) = delete;
+    LRUKNode(LRUKNode &&other) noexcept
+      : isEvictable(other.isEvictable),
+        isRemoved(other.isRemoved),
+        history(std::move(other.history)),
+        k_(other.k_),
+        fid_(other.fid_) {
+      // couldn't assign a mutex here, need to construct a new one
+  }
+
+  LRUKNode &operator=(LRUKNode &&other) noexcept {
+    if (this != &other) {
+        isEvictable = other.isEvictable;
+        isRemoved = other.isRemoved;
+        history = std::move(other.history);
+        k_ = other.k_;
+        fid_ = other.fid_;
+        // could not assign a mutex here
+    }
+    return *this;
+  }
 
   void frameRecordAccess(size_t timestamp) {
     if (history.size() == k_) {
@@ -58,6 +81,7 @@ class LRUKNode {
     std::deque<size_t>().swap(history);
   }
 
+  std::mutex node_latch;  // newly added latch for more fine-grained concurrency
   bool isEvictable{false};
   bool isRemoved{false};
 
@@ -117,7 +141,7 @@ class LRUKReplacer {
   size_t k_;
   std::mutex latch_;
 
-  std::unordered_map<frame_id_t, LRUKNode> node_store_;
+  // std::unordered_map<frame_id_t, LRUKNode> node_store_;
   std::vector<LRUKNode> frames;
   
 };

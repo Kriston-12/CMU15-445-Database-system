@@ -139,7 +139,34 @@ auto BufferPoolManager::NewPage() -> page_id_t {
  * @param page_id The page ID of the page we want to delete.
  * @return `false` if the page exists but could not be deleted, `true` if the page didn't exist or deletion succeeded.
  */
-auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool { 
+  std::scoped_lock latch(*bpm_latch_);
+
+  auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return true;     // page didn't exist
+  }
+
+  frame_id_t frame_id_delete = it->second;
+  auto frame_header = frames_[frame_id_delete];
+  if (frame_header->pin_count_ > 0) {
+    return false;
+  }
+
+  //Remove page from page_table_
+  page_table_.erase(page_id);
+  //Free this frame
+  free_frames_.push_back(page_id);
+  //Let disk_scheduler mark the corresponding page offset of this page to removable
+  disk_scheduler_->DeallocatePage(page_id);
+
+  if (frame_header->is_dirty_) {
+    FlushPage(page_id);
+  }
+
+  frame_header->Reset();
+  return true;
+}
 
 /**
  * @brief Acquires an optional write-locked guard over a page of data. The user can specify an `AccessType` if needed.
