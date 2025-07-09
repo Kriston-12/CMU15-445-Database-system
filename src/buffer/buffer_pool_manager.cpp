@@ -208,7 +208,85 @@ auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool {
  * returns `std::nullopt`, otherwise returns a `WritePageGuard` ensuring exclusive and mutable access to a page's data.
  */
 auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_type) -> std::optional<WritePageGuard> {
-  UNIMPLEMENTED("TODO(P1): Add implementation.");
+
+  frame_id_t frame_id;
+
+  std::unique_lock<std::mutex> bpm_lock(*bpm_latch_); // Placing bpm_lock here is too coarse 
+
+  // Case 1: Already in memory
+  auto it = page_table_.find(page_id);
+  if (it != page_table_.end()) {
+    frame_id = it->second;
+    auto &frame = frames_[frame_id];
+    replacer_->RecordAccess(frame_id);
+    bpm_lock.unlock(); // Record Access之后解锁，能够确保最新的记录保存在replacer中，replacer.Evict()不能踢掉这个frame
+
+    std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    frame->pin_count_++;
+    
+    return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
+  }
+
+  // Case 2: free frame space available
+  if (!free_frames_.empty()) {
+    frame_id = free_frames_.front();
+    free_frames_.pop_front();
+    auto &frame = frames_[frame_id];
+    replacer_->RecordAccess(frame_id);
+    page_table_[page_id] = frame_id;
+    bpm_lock.unlock(); // Record Access之后解锁，
+
+    // read request from disk
+    std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_); // 因为Schedule 会修改frame->data_, 所以这里要先锁住
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
+
+    frame->pin_count_++;
+    frame->is_dirty_ = false;
+    frame->page_id_ = page_id;
+
+    return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
+  }
+
+  // Case3: Evict a frame from buffer pool
+  auto evicted_opt = replacer_->Evict();
+  if(!evicted_opt.has_value()) {
+    return std::nullopt;
+  }
+
+  frame_id = evicted_opt.value();
+  auto &frame = frames_[frame_id];
+  
+  page_id_t evcited_pid = frame->page_id_.value();
+  if (frame->is_dirty_) {
+    FlushPage(evcited_pid);
+  }
+
+  page_table_.erase(evcited_pid);
+  page_table_[page_id] = frame_id;
+
+  replacer_->RecordAccess(frame_id); 
+  bpm_lock.unlock(); // Record Access之后解锁，
+
+  std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_); // Reset之前要锁住保证此时没有其他thread往这里读数据
+  frame->Reset();
+  frame->page_id_ = page_id;
+
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
+  // if (!future.get()) { // This won't happen as I only have promise.set_value(true) after the request is handled
+  //   return std::nullopt;
+  // }
+  // replacer_->RecordAccess(frame_id); Not sure if this line should be put after Schedule 
+
+  // std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+  frame->pin_count_++;
+  frame->is_dirty_ = false;
+
+
+  return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
 
 /**
@@ -236,7 +314,75 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
  * returns `std::nullopt`, otherwise returns a `ReadPageGuard` ensuring shared and read-only access to a page's data.
  */
 auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_type) -> std::optional<ReadPageGuard> {
-  UNIMPLEMENTED("TODO(P1): Add implementation.");
+  frame_id_t frame_id;
+
+  std::unique_lock<std::mutex> bpm_lock(*bpm_latch_); 
+
+  auto it = page_table_.find(page_id);
+  // Case1: already in memory/page_table_
+  if (it != page_table_.end()) {
+    frame_id = it->second;
+    auto &frame = frames_[frame_id];        // 暂时还不确定这一行是否可以和下一行交换顺序
+    replacer_->RecordAccess(frame_id);
+    bpm_lock.unlock();
+
+    std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    frame->pin_count_++;
+    
+    return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
+  }
+
+  // Case2: free frames available
+  if (!free_frames_.empty()) {
+    frame_id = free_frames_.front();
+    free_frames_.pop_front();
+    auto& frame = frames_[frame_id];
+    page_table_[page_id] = frame_id;
+    replacer_->RecordAccess(frame_id);
+    bpm_lock.unlock();
+
+    //read request from disk
+    std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule(DiskRequest{/*is_write=*/ false, frame->data_.data(), page_id, std::move(promise)});
+
+    frame->pin_count_++;
+    return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
+  }
+
+  // Case3: evict a page from frame_
+  auto evicted_opt = replacer_->Evict();
+  if(!evicted_opt.has_value()) {
+    return std::nullopt;
+  }
+  frame_id = evicted_opt.value();
+  auto &frame = frames_[frame_id];
+
+  page_id_t evcited_pid = frame->page_id_.value();
+  if (frame->is_dirty_) {
+    FlushPage(evcited_pid);
+  }
+  page_table_.erase(evcited_pid);
+  page_table_[page_id] = frame_id;
+
+  replacer_->RecordAccess(frame_id); 
+  bpm_lock.unlock(); // Record Access之后解锁bpm
+
+  std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+  
+   // Reset之前要锁住保证此时没有其他thread往这里读数据
+  frame->Reset();
+  frame->page_id_ = page_id;
+
+  auto promise = disk_scheduler_->CreatePromise();
+  auto future = promise.get_future();
+  disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
+
+  frame->pin_count_++;
+  frame->is_dirty_ = false;
+
+  return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
 
 /**
