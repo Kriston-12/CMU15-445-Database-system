@@ -75,7 +75,7 @@ BufferPoolManager::BufferPoolManager(size_t num_frames, DiskManager *disk_manage
       disk_scheduler_(std::make_shared<DiskScheduler>(disk_manager)),
       log_manager_(log_manager) {
   // Not strictly necessary...
-  std::scoped_lock latch(*bpm_latch_);
+  std::unique_lock latch(*bpm_latch_);
 
   // Initialize the monotonically increasing counter at 0.
   next_page_id_.store(0);
@@ -140,7 +140,7 @@ auto BufferPoolManager::NewPage() -> page_id_t {
  * @return `false` if the page exists but could not be deleted, `true` if the page didn't exist or deletion succeeded.
  */
 auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool { 
-  std::scoped_lock latch(*bpm_latch_);
+  std::unique_lock latch(*bpm_latch_);
 
   auto it = page_table_.find(page_id);
   if (it == page_table_.end()) {
@@ -157,11 +157,11 @@ auto BufferPoolManager::DeletePage(page_id_t page_id) -> bool {
   page_table_.erase(page_id);
   //Free this frame
   free_frames_.push_back(page_id);
-  //Let disk_scheduler mark the corresponding page offset of this page to removable
+  //Let disk_scheduler mark the corresponding page offset of this page as removable
   disk_scheduler_->DeallocatePage(page_id);
 
   if (frame_header->is_dirty_) {
-    FlushPage(page_id);
+    FlushPageUnsafe(page_id);
   }
 
   frame_header->Reset();
@@ -221,8 +221,15 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
     replacer_->RecordAccess(frame_id);
     bpm_lock.unlock(); // Record Access之后解锁，能够确保最新的记录保存在replacer中，replacer.Evict()不能踢掉这个frame
 
-    std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    if (frame->page_id_ != page_id) { //这里加验证的原因是，当释放bpm_lock之后，frame可能直接被evict了，那么用户可能读出错的page，这是不允许的
+                                      //我们也可以把bpm.unlock()放在frame->pin_count_++后面，但是这造成全局锁scope过大，并行效率差，
+                                      //出现这种情况的概率很低，但是我们需要为了Strong consistency
+      frame->rwlatch_.unlock();
+      return std::nullopt;
+    }
     frame->pin_count_++;
+    // bpm_lock.unlock();//或者放在这里
     
     return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
   }
@@ -237,7 +244,11 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
     bpm_lock.unlock(); // Record Access之后解锁，
 
     // read request from disk
-    std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_); // 因为Schedule 会修改frame->data_, 所以这里要先锁住
+    std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_); // 因为Schedule 会修改frame->data_, 所以这里要先锁住
+    if (frame->page_id_ != page_id) { 
+      frame->rwlatch_.unlock();
+      return std::nullopt;
+    }
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
     disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
@@ -260,7 +271,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   
   page_id_t evcited_pid = frame->page_id_.value();
   if (frame->is_dirty_) {
-    FlushPage(evcited_pid);
+    FlushPageUnsafe(evcited_pid);
   }
 
   page_table_.erase(evcited_pid);
@@ -269,7 +280,11 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   replacer_->RecordAccess(frame_id); 
   bpm_lock.unlock(); // Record Access之后解锁，
 
-  std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_); // Reset之前要锁住保证此时没有其他thread往这里读数据
+  std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_); // Reset之前要锁住保证此时没有其他thread往这里读数据
+  if (frame->page_id_ != page_id) { 
+      frame->rwlatch_.unlock();
+      return std::nullopt;
+  }
   frame->Reset();
   frame->page_id_ = page_id;
 
@@ -281,10 +296,9 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   // }
   // replacer_->RecordAccess(frame_id); Not sure if this line should be put after Schedule 
 
-  // std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+  // std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
   frame->pin_count_++;
   frame->is_dirty_ = false;
-
 
   return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
@@ -326,7 +340,11 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
     replacer_->RecordAccess(frame_id);
     bpm_lock.unlock();
 
-    std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    if (frame->page_id_ != page_id) { 
+      frame->rwlatch_.unlock();
+      return std::nullopt;
+    }
     frame->pin_count_++;
     
     return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
@@ -342,7 +360,11 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
     bpm_lock.unlock();
 
     //read request from disk
-    std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
+    if (frame->page_id_ != page_id) { 
+      frame->rwlatch_.unlock();
+      return std::nullopt;
+    }
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
     disk_scheduler_->Schedule(DiskRequest{/*is_write=*/ false, frame->data_.data(), page_id, std::move(promise)});
@@ -361,7 +383,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
 
   page_id_t evcited_pid = frame->page_id_.value();
   if (frame->is_dirty_) {
-    FlushPage(evcited_pid);
+    FlushPageUnsafe(evcited_pid);
   }
   page_table_.erase(evcited_pid);
   page_table_[page_id] = frame_id;
@@ -369,7 +391,11 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
   replacer_->RecordAccess(frame_id); 
   bpm_lock.unlock(); // Record Access之后解锁bpm
 
-  std::scoped_lock<std::shared_mutex> wlock(frame->rwlatch_);
+  std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
+  if (frame->page_id_ != page_id) { 
+      frame->rwlatch_.unlock();
+      return std::nullopt;
+  }
   
    // Reset之前要锁住保证此时没有其他thread往这里读数据
   frame->Reset();
@@ -454,7 +480,25 @@ auto BufferPoolManager::ReadPage(page_id_t page_id, AccessType access_type) -> R
  * @param page_id The page ID of the page to be flushed.
  * @return `false` if the page could not be found in the page table, otherwise `true`.
  */
-auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool { 
+  // std::unique_lock<std::mutex> bpm_lock(*bpm_latch_);  this is acquired in the caller
+  // Unabel to find page_id, return immediately
+  auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return false;
+  }
+
+  frame_id_t frame_id = it->second;
+  auto &frame = frames_[frame_id];
+
+  if (frame->is_dirty_) {
+    disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_id, disk_scheduler_->CreatePromise()});
+  }
+  
+  frame->is_dirty_ = false;
+
+  return true;
+}
 
 /**
  * @brief Flushes a page's data out to disk safely.
@@ -474,7 +518,27 @@ auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool { UNIMPLEMENT
  * @param page_id The page ID of the page to be flushed.
  * @return `false` if the page could not be found in the page table, otherwise `true`.
  */
-auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
+  std::unique_lock<std::mutex> bpm_lock(*bpm_latch_); 
+  // Unabel to find page_id, return immediately
+  auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return false;
+  }
+
+  frame_id_t frame_id = it->second;
+  auto &frame = frames_[frame_id];
+
+  frame->rwlatch_.lock();
+  if (frame->is_dirty_) {
+    disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_id, disk_scheduler_->CreatePromise()});
+  }
+  
+  frame->is_dirty_ = false;
+
+  frame->rwlatch_.unlock();
+  return true;
+}
 
 /**
  * @brief Flushes all page data that is in memory to disk unsafely.
