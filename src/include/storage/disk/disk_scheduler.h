@@ -77,6 +77,14 @@ class DiskScheduler {
    */
   void DeallocatePage(page_id_t page_id) { disk_manager_->DeletePage(page_id); }
 
+
+  // // This function is used when buffer manager writes data back to disks, found not applicable later.
+  // auto CreateNoopPromise() -> std::promise<bool> {
+  //   std::promise<bool> p;
+  //   p.set_value(true);
+  //   return p;
+  // }
+
  private:
   /** Pointer to the disk manager. */
   DiskManager *disk_manager_ __attribute__((__unused__));

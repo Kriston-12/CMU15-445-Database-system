@@ -117,7 +117,10 @@ auto BufferPoolManager::Size() const -> size_t { return num_frames_; }
  * @return The page ID of the newly allocated page.
  */
 auto BufferPoolManager::NewPage() -> page_id_t { 
-    return next_page_id_.fetch_add(1);
+    page_id_t page_id = next_page_id_.fetch_add(1);
+    auto guard_opt = CheckedWritePage(page_id);
+    BUSTUB_ASSERT(guard_opt.has_value(), "unable to create new page in NewPage()");
+    return page_id;
 }
 
 /**
@@ -225,7 +228,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
     if (frame->page_id_ != page_id) { //这里加验证的原因是，当释放bpm_lock之后，frame可能直接被evict了，那么用户可能读出错的page，这是不允许的
                                       //我们也可以把bpm.unlock()放在frame->pin_count_++后面，但是这造成全局锁scope过大，并行效率差，
                                       //出现这种情况的概率很低，但是我们需要为了Strong consistency
-      frame->rwlatch_.unlock();
+      // frame->rwlatch_.unlock();
       return std::nullopt;
     }
     frame->pin_count_++;
@@ -246,12 +249,13 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
     // read request from disk
     std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_); // 因为Schedule 会修改frame->data_, 所以这里要先锁住
     if (frame->page_id_ != page_id) { 
-      frame->rwlatch_.unlock();
+      // frame->rwlatch_.unlock();
       return std::nullopt;
     }
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
     disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
+    BUSTUB_ASSERT(future.get(), "Unable to bring page in CheckedWritePage");
 
     frame->pin_count_++;
     frame->is_dirty_ = false;
@@ -282,7 +286,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
 
   std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_); // Reset之前要锁住保证此时没有其他thread往这里读数据
   if (frame->page_id_ != page_id) { 
-      frame->rwlatch_.unlock();
+      // frame->rwlatch_.unlock();
       return std::nullopt;
   }
   frame->Reset();
@@ -291,6 +295,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   auto promise = disk_scheduler_->CreatePromise();
   auto future = promise.get_future();
   disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
+  BUSTUB_ASSERT(future.get(), "Unable to bring page in CheckedWritePage");
   // if (!future.get()) { // This won't happen as I only have promise.set_value(true) after the request is handled
   //   return std::nullopt;
   // }
@@ -342,7 +347,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
 
     std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
     if (frame->page_id_ != page_id) { 
-      frame->rwlatch_.unlock();
+      // frame->rwlatch_.unlock();
       return std::nullopt;
     }
     frame->pin_count_++;
@@ -368,6 +373,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
     disk_scheduler_->Schedule(DiskRequest{/*is_write=*/ false, frame->data_.data(), page_id, std::move(promise)});
+    BUSTUB_ASSERT(future.get(), "Unable to bring page in CheckedReadPage");
 
     frame->pin_count_++;
     return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
@@ -393,7 +399,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
 
   std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
   if (frame->page_id_ != page_id) { 
-      frame->rwlatch_.unlock();
+      // frame->rwlatch_.unlock();
       return std::nullopt;
   }
   
@@ -402,8 +408,9 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
   frame->page_id_ = page_id;
 
   auto promise = disk_scheduler_->CreatePromise();
-  auto future = promise.get_future();
+  auto future = promise.get_future();   // 这一行似乎可以去掉, I assume future.get() will always receive true--(memory 暂时是无限的)
   disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
+  BUSTUB_ASSERT(future.get(), "Unable to bring page in CheckedReadPage");
 
   frame->pin_count_++;
   frame->is_dirty_ = false;
@@ -492,10 +499,13 @@ auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool {
   auto &frame = frames_[frame_id];
 
   if (frame->is_dirty_) {
-    disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_id, disk_scheduler_->CreatePromise()});
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_id, std::move(promise)});
+    BUSTUB_ASSERT(future.get(), "Uanble to flush page in FlushPageUnsafe()");
+    frame->is_dirty_ = false;
   }
   
-  frame->is_dirty_ = false;
 
   return true;
 }
@@ -531,11 +541,13 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
 
   frame->rwlatch_.lock();
   if (frame->is_dirty_) {
-    disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_id, disk_scheduler_->CreatePromise()});
+    auto promise = disk_scheduler_->CreatePromise();
+    auto future = promise.get_future();
+    disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_id, std::move(promise)});
+    BUSTUB_ASSERT(future.get(), "Uanble to flush page in FlushPage()");
+    frame->is_dirty_ = false;
   }
   
-  frame->is_dirty_ = false;
-
   frame->rwlatch_.unlock();
   return true;
 }
@@ -553,7 +565,20 @@ auto BufferPoolManager::FlushPage(page_id_t page_id) -> bool {
  *
  * TODO(P1): Add implementation
  */
-void BufferPoolManager::FlushAllPagesUnsafe() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+void BufferPoolManager::FlushAllPagesUnsafe() { 
+  for (const auto& page_to_frame_pair : page_table_) {
+    auto& frame = frames_[page_to_frame_pair.second];
+    // frame->rwlatch.lock();
+    if (frame->is_dirty_) {
+      auto promise = disk_scheduler_->CreatePromise();
+      auto future = promise.get_future();;
+      disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_to_frame_pair.first, std::move(promise)});
+      BUSTUB_ASSERT(future.get(), "Uanble to flush page in FlushAllPageUnsafe()");
+      frame->is_dirty_ = false;
+    }
+    // frame->rwlatch.unlock();
+  }
+}
 
 /**
  * @brief Flushes all page data that is in memory to disk safely.
@@ -567,7 +592,21 @@ void BufferPoolManager::FlushAllPagesUnsafe() { UNIMPLEMENTED("TODO(P1): Add imp
  *
  * TODO(P1): Add implementation
  */
-void BufferPoolManager::FlushAllPages() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
+void BufferPoolManager::FlushAllPages() {
+  std::scoped_lock bpm_lock(*bpm_latch_);
+    for (const auto& page_to_frame_pair : page_table_) {
+    auto& frame = frames_[page_to_frame_pair.second];
+    frame->rwlatch_.lock();
+    if (frame->is_dirty_) {
+      auto promise = disk_scheduler_->CreatePromise();
+      auto future = promise.get_future();
+      disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_to_frame_pair.first, std::move(promise)});
+      BUSTUB_ASSERT(future.get(), "Uanble to flush page in FlushAllPage()");
+      frame->is_dirty_ = false;
+    }
+    frame->rwlatch_.unlock();
+  }
+}
 
 /**
  * @brief Retrieves the pin count of a page. If the page does not exist in memory, return `std::nullopt`.
@@ -594,7 +633,13 @@ void BufferPoolManager::FlushAllPages() { UNIMPLEMENTED("TODO(P1): Add implement
  * @return std::optional<size_t> The pin count if the page exists, otherwise `std::nullopt`.
  */
 auto BufferPoolManager::GetPinCount(page_id_t page_id) -> std::optional<size_t> {
-  UNIMPLEMENTED("TODO(P1): Add implementation.");
+  std::scoped_lock lock(*bpm_latch_);
+  auto it = page_table_.find(page_id);
+  if (it == page_table_.end()) {
+    return std::nullopt;
+  }
+
+  return frames_[it->second]->pin_count_;
 }
 
 }  // namespace bustub
