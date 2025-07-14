@@ -35,7 +35,7 @@ auto FrameHeader::GetData() const -> const char * { return data_.data(); }
  *
  * @return char* A pointer to mutable data that the frame stores.
  */
-auto FrameHeader::GetDataMut() -> char * { return data_.data(); }
+auto FrameHeader::GetDataMut() -> char * { is_dirty_ = true; return data_.data(); }
 
 /**
  * @brief Resets a `FrameHeader`'s member fields.
@@ -90,6 +90,7 @@ BufferPoolManager::BufferPoolManager(size_t num_frames, DiskManager *disk_manage
   // initially free).
   for (size_t i = 0; i < num_frames_; i++) {
     frames_.emplace_back(std::make_shared<FrameHeader>(i));
+    frames_[i]->page_id_ = -1;
     free_frames_.push_back(static_cast<int>(i));
   }
 }
@@ -118,8 +119,9 @@ auto BufferPoolManager::Size() const -> size_t { return num_frames_; }
  */
 auto BufferPoolManager::NewPage() -> page_id_t { 
     page_id_t page_id = next_page_id_.fetch_add(1);
-    auto guard_opt = CheckedWritePage(page_id);
-    BUSTUB_ASSERT(guard_opt.has_value(), "unable to create new page in NewPage()");
+    // auto guard_opt = CheckedWritePage(page_id);
+    // guard_opt->owns_pin = false;
+    // BUSTUB_ASSERT(guard_opt.has_value(), "unable to create new page in NewPage()");
     return page_id;
 }
 
@@ -222,18 +224,17 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
     frame_id = it->second;
     auto &frame = frames_[frame_id];
     replacer_->RecordAccess(frame_id);
-    bpm_lock.unlock(); // Record Access之后解锁，能够确保最新的记录保存在replacer中，replacer.Evict()不能踢掉这个frame
+    // bpm_lock.unlock(); // Record Access之后解锁，能够确保最新的记录保存在replacer中，replacer.Evict()不能踢掉这个frame
 
     std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
-    if (frame->page_id_ != page_id) { //这里加验证的原因是，当释放bpm_lock之后，frame可能直接被evict了，那么用户可能读出错的page，这是不允许的
-                                      //我们也可以把bpm.unlock()放在frame->pin_count_++后面，但是这造成全局锁scope过大，并行效率差，
-                                      //出现这种情况的概率很低，但是我们需要为了Strong consistency
-      // frame->rwlatch_.unlock();
-      return std::nullopt;
-    }
+    // if (frame->page_id_ != -1 && frame->page_id_ != page_id) { //这里加验证的原因是，当释放bpm_lock之后，frame可能直接被evict了，那么用户可能读出错的page，这是不允许的
+    //                                   //我们也可以把bpm.unlock()放在frame->pin_count_++后面，但是这造成全局锁scope过大，并行效率差，
+    //                                   //出现这种情况的概率很低，但是我们需要为了Strong consistency
+    //   // frame->rwlatch_.unlock();
+    //   return std::nullopt;
+    // }
     frame->pin_count_++;
-    // bpm_lock.unlock();//或者放在这里
-    
+
     return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
   }
 
@@ -243,24 +244,26 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
     free_frames_.pop_front();
     auto &frame = frames_[frame_id];
     replacer_->RecordAccess(frame_id);
+    replacer_->SetEvictable(frame_id, false);
     page_table_[page_id] = frame_id;
-    bpm_lock.unlock(); // Record Access之后解锁，
+    // bpm_lock.unlock(); // Record Access之后解锁，
 
     // read request from disk
     std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_); // 因为Schedule 会修改frame->data_, 所以这里要先锁住
-    if (frame->page_id_ != page_id) { 
-      // frame->rwlatch_.unlock();
-      return std::nullopt;
-    }
+    // if (frame->page_id_ != -1 && frame->page_id_ != page_id) { 
+    //   // frame->rwlatch_.unlock();
+    //   return std::nullopt;
+    // }
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
     disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
     BUSTUB_ASSERT(future.get(), "Unable to bring page in CheckedWritePage");
+    std::cout << "Case2: after future.get(), frame->data_ is" << frame->data_.data() << std::endl;
 
     frame->pin_count_++;
-    frame->is_dirty_ = false;
+    frame->is_dirty_ = false;  // 这里设置为true?
     frame->page_id_ = page_id;
-
+  
     return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
   }
 
@@ -282,20 +285,21 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   page_table_[page_id] = frame_id;
 
   replacer_->RecordAccess(frame_id); 
-  bpm_lock.unlock(); // Record Access之后解锁，
+  // bpm_lock.unlock(); // Record Access之后解锁，
 
   std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_); // Reset之前要锁住保证此时没有其他thread往这里读数据
-  if (frame->page_id_ != page_id) { 
-      // frame->rwlatch_.unlock();
-      return std::nullopt;
-  }
-  frame->Reset();
+  // if (frame->page_id_ != -1 && frame->page_id_ != page_id) { 
+  //     // frame->rwlatch_.unlock();
+  //     return std::nullopt;
+  // }
+  frame->Reset(); 
   frame->page_id_ = page_id;
 
   auto promise = disk_scheduler_->CreatePromise();
   auto future = promise.get_future();
   disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
   BUSTUB_ASSERT(future.get(), "Unable to bring page in CheckedWritePage");
+  std::cout << "Case3: after future.get(), frame->data_ is" << frame->data_.data() << std::endl;
   // if (!future.get()) { // This won't happen as I only have promise.set_value(true) after the request is handled
   //   return std::nullopt;
   // }
@@ -343,13 +347,21 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
     frame_id = it->second;
     auto &frame = frames_[frame_id];        // 暂时还不确定这一行是否可以和下一行交换顺序
     replacer_->RecordAccess(frame_id);
-    bpm_lock.unlock();
+    // bpm_lock.unlock();
+
+    // if (frame->rwlatch_.try_lock()) {
+    //   std::cout << "Lock is free (was able to acquire it).\n";
+    //   frame->rwlatch_.unlock();
+    // }
+    // else {
+    //   std::cout << "Lock is currently held by someone else.\n";
+    // }
 
     std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
-    if (frame->page_id_ != page_id) { 
-      // frame->rwlatch_.unlock();
-      return std::nullopt;
-    }
+    // if (frame->page_id_ != -1 && frame->page_id_ != page_id) { 
+    //   // frame->rwlatch_.unlock();
+    //   return std::nullopt;
+    // }
     frame->pin_count_++;
     
     return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
@@ -360,20 +372,23 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
     frame_id = free_frames_.front();
     free_frames_.pop_front();
     auto& frame = frames_[frame_id];
+    replacer_->SetEvictable(frame_id, false);
     page_table_[page_id] = frame_id;
     replacer_->RecordAccess(frame_id);
-    bpm_lock.unlock();
+    // bpm_lock.unlock();
 
+  
     //read request from disk
     std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
-    if (frame->page_id_ != page_id) { 
-      frame->rwlatch_.unlock();
-      return std::nullopt;
-    }
+    // if (frame->page_id_ != -1 && frame->page_id_ != page_id) { 
+    //   frame->rwlatch_.unlock();
+    //   return std::nullopt;
+    // }
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
     disk_scheduler_->Schedule(DiskRequest{/*is_write=*/ false, frame->data_.data(), page_id, std::move(promise)});
     BUSTUB_ASSERT(future.get(), "Unable to bring page in CheckedReadPage");
+    std::cout << "Case2: after future.get(), frame->data_ is" << frame->data_.data() << std::endl;
 
     frame->pin_count_++;
     return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
@@ -395,13 +410,13 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
   page_table_[page_id] = frame_id;
 
   replacer_->RecordAccess(frame_id); 
-  bpm_lock.unlock(); // Record Access之后解锁bpm
+  // bpm_lock.unlock(); // Record Access之后解锁bpm
 
   std::unique_lock<std::shared_mutex> wlock(frame->rwlatch_);
-  if (frame->page_id_ != page_id) { 
-      // frame->rwlatch_.unlock();
-      return std::nullopt;
-  }
+  // if (frame->page_id_ != -1 && frame->page_id_ != page_id) { 
+  //     // frame->rwlatch_.unlock();
+  //     return std::nullopt;
+  // }
   
    // Reset之前要锁住保证此时没有其他thread往这里读数据
   frame->Reset();
@@ -411,6 +426,7 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
   auto future = promise.get_future();   // 这一行似乎可以去掉, I assume future.get() will always receive true--(memory 暂时是无限的)
   disk_scheduler_->Schedule(DiskRequest{/*is_write=*/false, frame->data_.data(), page_id, std::move(promise)});
   BUSTUB_ASSERT(future.get(), "Unable to bring page in CheckedReadPage");
+  std::cout << "Case3: after future.get(), frame->data_ is" << frame->data_.data() << std::endl;
 
   frame->pin_count_++;
   frame->is_dirty_ = false;

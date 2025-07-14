@@ -35,11 +35,13 @@ ReadPageGuard::ReadPageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> fra
       frame_(std::move(frame)),
       replacer_(std::move(replacer)),
       bpm_latch_(std::move(bpm_latch)),
-      disk_scheduler_(std::move(disk_scheduler)) {
+      disk_scheduler_(std::move(disk_scheduler))
+      // read_lock_(frame->rwlatch_)
+{
   // UNIMPLEMENTED("TODO(P1): Add implementation.");
 
-  frame_->rwlatch_.lock_shared(); // the frame is read, so we need to ensure we dont modify the frame
-  frame_->pin_count_++;
+  // frame_->rwlatch_.lock_shared(); // the frame is read, so we need to ensure we dont modify the frame
+  // frame_->pin_count_++;
   // replacer_->SetEvictable(frame_->frame_id_, false);  it is false by default
   is_valid_ = true;
 }
@@ -151,11 +153,11 @@ void ReadPageGuard::Flush() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
  * TODO(P1): Add implementation.
  */
 void ReadPageGuard::Drop() { 
-  if (is_valid_) {
+  if (is_valid_ ) {
     frame_->pin_count_--;
-    frame_->rwlatch_.unlock_shared();
+    // frame_->rwlatch_.unlock_shared();
     this->is_valid_ = false;
-    if ((frame_->pin_count_) == 0 ) { 
+    if (owns_pin && (frame_->pin_count_) == 0 ) { 
       replacer_->SetEvictable(frame_->frame_id_, true);
     }
   }
@@ -188,10 +190,12 @@ WritePageGuard::WritePageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> f
       frame_(std::move(frame)),
       replacer_(std::move(replacer)),
       bpm_latch_(std::move(bpm_latch)),
-      disk_scheduler_(std::move(disk_scheduler)) {
-  frame_->rwlatch_.lock();
+      disk_scheduler_(std::move(disk_scheduler))
+      // write_lock_(frame->rwlatch_)
+{
+  // frame_->rwlatch_.lock(); // This is lcokd when the caller calls WritePageGuard
   is_valid_ = true;
-  frame_->pin_count_++;
+  // frame_->pin_count_++; // This is handled in the caller
 }
 
 /**
@@ -301,9 +305,9 @@ void WritePageGuard::Flush() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
 void WritePageGuard::Drop() { 
   if (is_valid_) {
     frame_->pin_count_--;      // 这一行应该不能放在unlock前面，如果首先unlock，那么肯能会导致pin_count_--计数错误 (race condition)
-    frame_->rwlatch_.unlock();
+    // frame_->rwlatch_.unlock();
     this->is_valid_ = false;
-    if ((frame_->pin_count_) == 0 ) { 
+    if (owns_pin && (frame_->pin_count_) == 0 ) { 
       replacer_->SetEvictable(frame_->frame_id_, true);
     }
   }

@@ -64,10 +64,14 @@ void DiskScheduler::StartWorkerThread() {
     DiskRequest req = std::move(request.value());
 
     if (req.is_write_) {
+      
       disk_manager_->WritePage(req.page_id_, req.data_);
+      
     }
     else {
+      // std::cout << "[Scheduler] Reading page " << req.page_id_ << " into " << static_cast<void*>(req.data_) << std::endl;
       disk_manager_->ReadPage(req.page_id_, req.data_);
+      // std::cout << "[Scheduler] After read: " << std::string(req.data_, 20) << std::endl;
     }
 
     req.callback_.set_value(true);
