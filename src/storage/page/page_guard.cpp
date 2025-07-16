@@ -36,14 +36,17 @@ ReadPageGuard::ReadPageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> fra
       replacer_(std::move(replacer)),
       bpm_latch_(std::move(bpm_latch)),
       disk_scheduler_(std::move(disk_scheduler))
-      // read_lock_(frame->rwlatch_)
 {
-  // UNIMPLEMENTED("TODO(P1): Add implementation.");
-
-  // frame_->rwlatch_.lock_shared(); // the frame is read, so we need to ensure we dont modify the frame
-  // frame_->pin_count_++;
-  // replacer_->SetEvictable(frame_->frame_id_, false);  it is false by default
+  // frame_->rwlatch_.lock(); // This is lcokd when the caller calls WritePageGuard
+  bpm_latch_->unlock();
+  // std::cerr << "Before locking page " << page_id_ << std::endl;
+  read_lock_ = std::shared_lock<std::shared_mutex>(frame_->rwlatch_);
+  // std::cerr << "After locking page " << page_id_ << std::endl;
   is_valid_ = true;
+  frame_->pin_count_++; // This is handled in the caller
+  replacer_->RecordAccess(frame_->frame_id_);
+  replacer_->SetEvictable(frame_->frame_id_, false);
+  // read_lock_.unlock();
 }
 
 
@@ -62,16 +65,16 @@ ReadPageGuard::ReadPageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> fra
  *
  * @param that The other page guard.
  */
-ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept {
-  page_id_ = that.page_id_;
-  frame_ = std::move(that.frame_);
-  bpm_latch_ = std::move(that.bpm_latch_);
-  replacer_ = std::move(that.replacer_);
-  is_valid_ = that.is_valid_;
-  that.is_valid_ = false;  // This is necessary, if is_valid_ = true, then the destructor will unlock an already moved pageguard--undefined behavior
-  // that.bpm_latch_ = nullptr;
-  // that.frame_ = nullptr; 
-  // that.replacer_ = nullptr; 
+ReadPageGuard::ReadPageGuard(ReadPageGuard &&that) noexcept 
+  : page_id_(that.page_id_),
+    frame_(std::move(that.frame_)),
+    replacer_(std::move(that.replacer_)),
+    bpm_latch_(std::move(that.bpm_latch_)),
+    disk_scheduler_(std::move(that.disk_scheduler_)),
+    is_valid_(that.is_valid_),
+    read_lock_(std::move(that.read_lock_))
+{
+  that.is_valid_ = false;
 }
 
 /**
@@ -98,14 +101,13 @@ auto ReadPageGuard::operator=(ReadPageGuard &&that) noexcept -> ReadPageGuard & 
                                 // it'll call shift assignment, which is the function itself again, -- recursive infinite loop
     // Code below is valid 
     page_id_ = that.page_id_;
-    bpm_latch_ = std::move(that.bpm_latch_);
     frame_ = std::move(that.frame_);
     replacer_ = std::move(that.replacer_);
+    bpm_latch_ = std::move(that.bpm_latch_);
+    disk_scheduler_ = std::move(that.disk_scheduler_);
+    read_lock_ = std::move(that.read_lock_);  //很关键，转移锁的所有权
     is_valid_ = that.is_valid_;
     that.is_valid_ = false;
-    // that.bpm_latch_ = nullptr; // std move will automatically set that.bm_latch to nullptr
-    // that.frame_ = nullptr;
-    // that.replacer_ = nullptr;
   }
   return *this; 
 }
@@ -153,15 +155,17 @@ void ReadPageGuard::Flush() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
  * TODO(P1): Add implementation.
  */
 void ReadPageGuard::Drop() { 
-  if (is_valid_ ) {
-    frame_->pin_count_--;
-    // frame_->rwlatch_.unlock_shared();
-    this->is_valid_ = false;
-    if (owns_pin && (frame_->pin_count_) == 0 ) { 
-      replacer_->SetEvictable(frame_->frame_id_, true);
-    }
+  if (!is_valid_) {
+    return;
   }
- }
+  bpm_latch_->lock();
+  if (--frame_->pin_count_ == 0) {
+    replacer_->SetEvictable(frame_->frame_id_, true);
+  }
+  read_lock_.unlock();
+  bpm_latch_->unlock();
+  is_valid_ = false;
+}
 
 /** @brief The destructor for `ReadPageGuard`. This destructor simply calls `Drop()`. */
 ReadPageGuard::~ReadPageGuard() { Drop(); }
@@ -191,11 +195,21 @@ WritePageGuard::WritePageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> f
       replacer_(std::move(replacer)),
       bpm_latch_(std::move(bpm_latch)),
       disk_scheduler_(std::move(disk_scheduler))
-      // write_lock_(frame->rwlatch_)
 {
   // frame_->rwlatch_.lock(); // This is lcokd when the caller calls WritePageGuard
+  // 这里不能写在参数列表里面，也就是 write_lock_(frame_->rwlatch_) 是错误的，因为参数的初始化不是按照从上到下的顺序的，也就是说frame还没有move给当前的frame的时候
+  // write_lock_就尝试获取frame_的rwlatch，frame此时是空，所以会报错
+  bpm_latch_->unlock();
+  // std::cerr << "Before locking page " << page_id_ << std::endl;
+  write_lock_ = std::unique_lock<std::shared_mutex>(frame_->rwlatch_); 
+  // std::cerr << "After locking page " << page_id_ << std::endl;
+
   is_valid_ = true;
-  // frame_->pin_count_++; // This is handled in the caller
+  frame_->is_dirty_ = true;
+  frame_->pin_count_++; // This is handled in the caller
+  replacer_->RecordAccess(frame_->frame_id_);
+  replacer_->SetEvictable(frame_->frame_id_, false);
+  // write_lock_.unlock();
 }
 
 /**
@@ -213,12 +227,15 @@ WritePageGuard::WritePageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> f
  *
  * @param that The other page guard.
  */
-WritePageGuard::WritePageGuard(WritePageGuard &&that) noexcept {
-  page_id_ = that.page_id_;
-  frame_ = std::move(that.frame_);
-  bpm_latch_ = std::move(that.bpm_latch_);
-  replacer_ = std::move(that.replacer_);
-  is_valid_ = that.is_valid_;
+WritePageGuard::WritePageGuard(WritePageGuard &&that) noexcept 
+  : page_id_(that.page_id_),
+    frame_(std::move(that.frame_)),
+    replacer_(std::move(that.replacer_)),
+    bpm_latch_(std::move(that.bpm_latch_)),
+    disk_scheduler_(std::move(that.disk_scheduler_)),
+    is_valid_(that.is_valid_),
+    write_lock_(std::move(that.write_lock_))
+{
   that.is_valid_ = false;
 }
 
@@ -243,9 +260,11 @@ auto WritePageGuard::operator=(WritePageGuard &&that) noexcept -> WritePageGuard
   if (this != &that) {
     this->Drop();
     page_id_ = that.page_id_;
-    bpm_latch_ = std::move(that.bpm_latch_);
     frame_ = std::move(that.frame_);
     replacer_ = std::move(that.replacer_);
+    bpm_latch_ = std::move(that.bpm_latch_);
+    disk_scheduler_ = std::move(that.disk_scheduler_);
+    write_lock_ = std::move(that.write_lock_);  //很关键，转移锁的所有权
     is_valid_ = that.is_valid_;
     that.is_valid_ = false;
   }
@@ -303,14 +322,16 @@ void WritePageGuard::Flush() { UNIMPLEMENTED("TODO(P1): Add implementation."); }
  * TODO(P1): Add implementation.
  */
 void WritePageGuard::Drop() { 
-  if (is_valid_) {
-    frame_->pin_count_--;      // 这一行应该不能放在unlock前面，如果首先unlock，那么肯能会导致pin_count_--计数错误 (race condition)
-    // frame_->rwlatch_.unlock();
-    this->is_valid_ = false;
-    if (owns_pin && (frame_->pin_count_) == 0 ) { 
-      replacer_->SetEvictable(frame_->frame_id_, true);
-    }
+  if (!is_valid_) {
+    return;
   }
+  bpm_latch_->lock();
+  if (--frame_->pin_count_ == 0) {
+    replacer_->SetEvictable(frame_->frame_id_, true);
+  }
+  write_lock_.unlock();
+  bpm_latch_->unlock();
+  is_valid_ = false;
 }
 
 /** @brief The destructor for `WritePageGuard`. This destructor simply calls `Drop()`. */

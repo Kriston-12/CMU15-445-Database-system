@@ -61,20 +61,20 @@ void DiskScheduler::StartWorkerThread() {
       break;
     }
 
-    DiskRequest req = std::move(request.value());
+    // DiskRequest req = std::move(request.value());
 
-    if (req.is_write_) {
+    if (request->is_write_) {
       
-      disk_manager_->WritePage(req.page_id_, req.data_);
+      disk_manager_->WritePage(request->page_id_, request->data_);
       
     }
     else {
       // std::cout << "[Scheduler] Reading page " << req.page_id_ << " into " << static_cast<void*>(req.data_) << std::endl;
-      disk_manager_->ReadPage(req.page_id_, req.data_);
+      disk_manager_->ReadPage(request->page_id_, request->data_);
       // std::cout << "[Scheduler] After read: " << std::string(req.data_, 20) << std::endl;
     }
 
-    req.callback_.set_value(true);
+    request->callback_.set_value(true);
   }
 }
 

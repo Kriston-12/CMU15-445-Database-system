@@ -31,7 +31,7 @@ void CopyString(char *dest, const std::string &src) {
   snprintf(dest, BUSTUB_PAGE_SIZE, "%s", src.c_str());
 }
 
-TEST(BufferPoolManagerTest, DISABLED_VeryBasicTest) {
+TEST(BufferPoolManagerTest, VeryBasicTest) {
   // A very basic test.
 
   auto disk_manager = std::make_shared<DiskManager>(db_fname);
@@ -71,7 +71,7 @@ TEST(BufferPoolManagerTest, DISABLED_VeryBasicTest) {
   ASSERT_TRUE(bpm->DeletePage(pid));
 }
 
-TEST(BufferPoolManagerTest, DISABLED_PagePinEasyTest) {
+TEST(BufferPoolManagerTest, PagePinEasyTest) {
   auto disk_manager = std::make_shared<DiskManager>(db_fname);
   auto bpm = std::make_shared<BufferPoolManager>(2, disk_manager.get(), 5);
 
@@ -169,7 +169,7 @@ TEST(BufferPoolManagerTest, DISABLED_PagePinEasyTest) {
   remove(disk_manager->GetLogFileName());
 }
 
-TEST(BufferPoolManagerTest, DISABLED_PagePinMediumTest) {
+TEST(BufferPoolManagerTest, PagePinMediumTest) {
   auto disk_manager = std::make_shared<DiskManager>(db_fname);
   auto bpm = std::make_shared<BufferPoolManager>(FRAMES, disk_manager.get(), K_DIST);
 
@@ -286,7 +286,7 @@ TEST(BufferPoolManagerTest, PageAccessTest) {
   thread.join();
 }
 
-TEST(BufferPoolManagerTest, DISABLED_ContentionTest) {
+TEST(BufferPoolManagerTest, ContentionTest) {
   auto disk_manager = std::make_shared<DiskManager>(db_fname);
   auto bpm = std::make_shared<BufferPoolManager>(FRAMES, disk_manager.get(), K_DIST);
 
@@ -328,7 +328,7 @@ TEST(BufferPoolManagerTest, DISABLED_ContentionTest) {
   thread1.join();
 }
 
-TEST(BufferPoolManagerTest, DISABLED_DeadlockTest) {
+TEST(BufferPoolManagerTest, DeadlockTest) {
   auto disk_manager = std::make_shared<DiskManager>(db_fname);
   auto bpm = std::make_shared<BufferPoolManager>(FRAMES, disk_manager.get(), K_DIST);
 
@@ -368,7 +368,7 @@ TEST(BufferPoolManagerTest, DISABLED_DeadlockTest) {
   child.join();
 }
 
-TEST(BufferPoolManagerTest, DISABLED_EvictableTest) {
+TEST(BufferPoolManagerTest, EvictableTest) {
   // Test if the evictable status of a frame is always correct.
   const size_t rounds = 1000;
   const size_t num_readers = 8;
