@@ -34,7 +34,10 @@ BPLUSTREE_TYPE::BPlusTree(std::string name, page_id_t header_page_id, BufferPool
  * @return Returns true if this B+ tree has no keys and values.
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::IsEmpty() const -> bool { UNIMPLEMENTED("TODO(P2): Add implementation."); }
+auto BPLUSTREE_TYPE::IsEmpty() const -> bool { 
+  ReadPageGuard guard = bpm_->ReadPage(header_page_id_);
+  return guard.As<BPlusTreeHeaderPage>()->root_page_id_ == INVALID_PAGE_ID;
+}
 
 /*****************************************************************************
  * SEARCH
@@ -58,6 +61,55 @@ auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result
 /*****************************************************************************
  * INSERTION
  *****************************************************************************/
+/**
+ * @brief A helper function that find the place to insert according to given  key
+ *
+ * @param key the key to insert
+ * @return: return the index to insert 
+ */
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::FindKeyBiSearch(const BPlusTreePage *page, const KeyType &key) -> int {
+  int left, right;
+
+  if (page->IsLeafPage()) {
+    auto leaf_page = static_cast<const LeafPage*>(page);
+    left = 0, right = leaf_page->GetSize() - 1; // [left, right]
+    while (left <= right) {
+      int mid = (left + right) >> 1;
+      if (comparator_(leaf_page->KeyAt(mid), key) == 0) { // nums[mid] == target
+        return mid;
+      }
+      if (comparator_(leaf_page->KeyAt(mid), key) < 0) { // nums[mid] < target
+        left = mid + 1;
+      }
+      else {
+        right = mid - 1;
+      }
+    }
+  }
+
+  auto internal_page = static_cast<const InternalPage *>(page);
+  
+  if (comparator_(internal_page->KeyAt(1), key) > 0) {  //nums[-1] > target, which means go to next level
+    return 0;
+  }
+
+  left = 1, right = internal_page->GetSize() - 1; // left = 1 is bc first key is invalid of a internal_page
+  while (l <= r) {
+    int mid = (l + r) >> 1;
+    if (comparator_(internal_page->KeyAt(mid), key) <= 0) {
+      // key >= key[mid]，key < key[mid+1]
+      if (mid + 1 == size || comparator_(key, internal_page->KeyAt(mid + 1)) < 0) {
+        return mid;
+      }
+      left = mid + 1;
+    }
+    else {
+      right = mid - 1;
+    }
+  }
+  return -1;
+}
 /**
  * @brief Insert constant key & value pair into b+ tree
  *
@@ -131,7 +183,11 @@ auto BPLUSTREE_TYPE::End() -> INDEXITERATOR_TYPE { UNIMPLEMENTED("TODO(P2): Add 
  * You may want to implement this while implementing Task #3.
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::GetRootPageId() -> page_id_t { UNIMPLEMENTED("TODO(P2): Add implementation."); }
+auto BPLUSTREE_TYPE::GetRootPageId() -> page_id_t {
+  auto guard = ReadPageGuard(header_page_id_);
+  auto header_page = guard.As<BPlusTreeHeaderPage>();
+  return header_page->root_page_id_;
+}
 
 template class BPlusTree<GenericKey<4>, RID, GenericComparator<4>>;
 
