@@ -37,16 +37,19 @@ ReadPageGuard::ReadPageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> fra
       bpm_latch_(std::move(bpm_latch)),
       disk_scheduler_(std::move(disk_scheduler))
 {
-  // frame_->rwlatch_.lock(); // This is lcokd when the caller calls WritePageGuard
   bpm_latch_->unlock();
   // std::cerr << "Before locking page " << page_id_ << std::endl;
   read_lock_ = std::shared_lock<std::shared_mutex>(frame_->rwlatch_);
+
+  // bpm_latch_->unlock();
   // std::cerr << "After locking page " << page_id_ << std::endl;
   is_valid_ = true;
-  frame_->pin_count_++; // This is handled in the caller
-  replacer_->RecordAccess(frame_->frame_id_);
-  replacer_->SetEvictable(frame_->frame_id_, false);
-  // read_lock_.unlock();
+
+  // 下面这三行如果放在这里，那么bpm_latch_->unlock()必须在frame->rwlatch_之后，也就是只能在获得了frame的rwlatch之后才能释放bpm全局锁，但是如果这样的话就过不了deadlock这个case，
+  // 所以策略就是只能把下面这三行代码放在ReadPageGuard的上层函数CheckedReadPage里面
+  // frame_->pin_count_++; // This is handled in the caller
+  // replacer_->RecordAccess(frame_->frame_id_);
+  // replacer_->SetEvictable(frame_->frame_id_, false);
 }
 
 
@@ -158,12 +161,12 @@ void ReadPageGuard::Drop() {
   if (!is_valid_) {
     return;
   }
-  bpm_latch_->lock();
+  // bpm_latch_->lock();
   if (--frame_->pin_count_ == 0) {
     replacer_->SetEvictable(frame_->frame_id_, true);
   }
+  // bpm_latch_->unlock();
   read_lock_.unlock();
-  bpm_latch_->unlock();
   is_valid_ = false;
 }
 
@@ -199,17 +202,18 @@ WritePageGuard::WritePageGuard(page_id_t page_id, std::shared_ptr<FrameHeader> f
   // frame_->rwlatch_.lock(); // This is lcokd when the caller calls WritePageGuard
   // 这里不能写在参数列表里面，也就是 write_lock_(frame_->rwlatch_) 是错误的，因为参数的初始化不是按照从上到下的顺序的，也就是说frame还没有move给当前的frame的时候
   // write_lock_就尝试获取frame_的rwlatch，frame此时是空，所以会报错
+  
   bpm_latch_->unlock();
   // std::cerr << "Before locking page " << page_id_ << std::endl;
   write_lock_ = std::unique_lock<std::shared_mutex>(frame_->rwlatch_); 
   // std::cerr << "After locking page " << page_id_ << std::endl;
+  // bpm_latch_->unlock();
 
   is_valid_ = true;
   frame_->is_dirty_ = true;
-  frame_->pin_count_++; // This is handled in the caller
-  replacer_->RecordAccess(frame_->frame_id_);
-  replacer_->SetEvictable(frame_->frame_id_, false);
-  // write_lock_.unlock();
+  // frame_->pin_count_++; 
+  // replacer_->RecordAccess(frame_->frame_id_);
+  // replacer_->SetEvictable(frame_->frame_id_, false);
 }
 
 /**
@@ -325,12 +329,12 @@ void WritePageGuard::Drop() {
   if (!is_valid_) {
     return;
   }
-  bpm_latch_->lock();
+  // bpm_latch_->lock();
   if (--frame_->pin_count_ == 0) {
     replacer_->SetEvictable(frame_->frame_id_, true);
   }
+  // bpm_latch_->unlock();
   write_lock_.unlock();
-  bpm_latch_->unlock();
   is_valid_ = false;
 }
 

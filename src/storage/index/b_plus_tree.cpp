@@ -13,6 +13,7 @@
 #include "storage/index/b_plus_tree.h"
 #include "storage/index/b_plus_tree_debug.h"
 
+
 namespace bustub {
 
 INDEX_TEMPLATE_ARGUMENTS
@@ -53,9 +54,40 @@ auto BPLUSTREE_TYPE::IsEmpty() const -> bool {
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::GetValue(const KeyType &key, std::vector<ValueType> *result) -> bool {
-  UNIMPLEMENTED("TODO(P2): Add implementation.");
+  
   // Declaration of context instance. Using the Context is not necessary but advised.
   Context ctx;
+
+  ReadPageGuard guard = bpm_->ReadPage(header_page_id_);
+  auto head_page = guard.As<BPlusTreeHeaderPage>();
+  ctx.root_page_id_ = head_page->root_page_id_;
+  guard.Drop();
+
+  if (ctx.root_page_id_ == INVALID_PAGE_ID) {
+    return false;
+  }
+
+  //Internal node
+  ctx.read_set_.push_back(bpm_->ReadPage(ctx.root_page_id_));
+  auto page = ctx.read_set_.back().As<BPlusTreePage>();
+  while (!page->IsLeafPage()) {
+    int index = FindKeyBiSearch(page, key);
+    if (index == -1) {return false;}
+    auto internal_page = static_cast<const InternalPage*>(page);
+    page_id_t page_id = internal_page->ValueAt(index);
+    ctx.read_set_.push_back(bpm_->ReadPage(page_id));  
+    page = ctx.read_set_.back().As<BPlusTreePage>();
+    ctx.read_set_.pop_front(); 
+  }
+
+  // Now the page is 
+  int index = FindKeyBiSearch(page, key);
+  if (index == -1) {return false;}
+
+  auto leaf_page = static_cast<const LeafPage*>(page);
+  result->push_back(leaf_page->ValueAt(index));
+
+  return true;
 }
 
 /*****************************************************************************
@@ -90,13 +122,14 @@ auto BPLUSTREE_TYPE::FindKeyBiSearch(const BPlusTreePage *page, const KeyType &k
 
   auto internal_page = static_cast<const InternalPage *>(page);
   
-  if (comparator_(internal_page->KeyAt(1), key) > 0) {  //nums[-1] > target, which means go to next level
+  if (comparator_(internal_page->KeyAt(1), key) > 0) {  //nums[1] > target, which means go to next level
     return 0;
   }
 
-  left = 1, right = internal_page->GetSize() - 1; // left = 1 is bc first key is invalid of a internal_page
-  while (l <= r) {
-    int mid = (l + r) >> 1;
+  int size = internal_page->GetSize();
+  left = 1, right = size - 1; // left = 1 is bc first key is invalid of a internal_page
+  while (left <= right) {
+    int mid = (left + right) >> 1;
     if (comparator_(internal_page->KeyAt(mid), key) <= 0) {
       // key >= key[mid]，key < key[mid+1]
       if (mid + 1 == size || comparator_(key, internal_page->KeyAt(mid + 1)) < 0) {
@@ -110,6 +143,12 @@ auto BPLUSTREE_TYPE::FindKeyBiSearch(const BPlusTreePage *page, const KeyType &k
   }
   return -1;
 }
+
+// INDEX_TEMPLATE_ARGUMENTS
+// auto BPLUSTREE_TYPE::LeafIndexBiSearch(const BPlusTreePage* page, const KeyType &key) -> int {
+//   int left, right = 0, bpm_->GetSize() - 1;
+// }
+
 /**
  * @brief Insert constant key & value pair into b+ tree
  *
@@ -184,7 +223,7 @@ auto BPLUSTREE_TYPE::End() -> INDEXITERATOR_TYPE { UNIMPLEMENTED("TODO(P2): Add 
  */
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::GetRootPageId() -> page_id_t {
-  auto guard = ReadPageGuard(header_page_id_);
+  auto guard = bpm_->ReadPage(header_page_id_);
   auto header_page = guard.As<BPlusTreeHeaderPage>();
   return header_page->root_page_id_;
 }

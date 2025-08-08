@@ -338,7 +338,7 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
       frame->Reset();
     } else {
       frame_id = free_frames_.front();
-      free_frames_.pop_front();
+      free_frames_.pop_front(); 
     }
 
     auto &frame = frames_[frame_id];
@@ -360,6 +360,10 @@ auto BufferPoolManager::CheckedWritePage(page_id_t page_id, AccessType access_ty
   }
 
   auto &frame = frames_[frame_id];
+
+  frame->pin_count_++; 
+  replacer_->RecordAccess(frame->frame_id_);
+  replacer_->SetEvictable(frame->frame_id_, false);
   return WritePageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
 
@@ -520,6 +524,10 @@ auto BufferPoolManager::CheckedReadPage(page_id_t page_id, AccessType access_typ
   }
 
   auto &frame = frames_[frame_id];
+  
+  frame->pin_count_++; 
+  replacer_->RecordAccess(frame->frame_id_);
+  replacer_->SetEvictable(frame->frame_id_, false);
   return ReadPageGuard(page_id, frame, replacer_, bpm_latch_, disk_scheduler_);
 }
 
@@ -603,13 +611,13 @@ auto BufferPoolManager::FlushPageUnsafe(page_id_t page_id) -> bool {
   frame_id_t frame_id = it->second;
   auto &frame = frames_[frame_id];
 
-  if (frame->is_dirty_) {
+  // if (frame->is_dirty_) { // If this function is called, the frame must be dirty
     auto promise = disk_scheduler_->CreatePromise();
     auto future = promise.get_future();
     disk_scheduler_->Schedule(DiskRequest{/*is_write=*/true, frame->data_.data(), page_id, std::move(promise)});
     BUSTUB_ASSERT(future.get(), "Uanble to flush page in FlushPageUnsafe()");
     frame->is_dirty_ = false;
-  }
+  // }
   
 
   return true;

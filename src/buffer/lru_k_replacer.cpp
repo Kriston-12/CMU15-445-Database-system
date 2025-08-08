@@ -23,7 +23,7 @@ namespace bustub {
  * @brief a new LRUKReplacer.
  * @param num_frames the maximum number of frames the LRUReplacer will be required to store
  */
-LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : replacer_size_(num_frames), k_(k) {
+LRUKReplacer::LRUKReplacer(size_t num_frames, size_t k) : replacer_size_(num_frames) {
     // frames.resize(num_frames);  // std::vector.resize() 会调用default constructor，但是LRUKNode没有default constructor，会报错
 
     // 下面这样做可以绕开default constructor，这里相当于对frames中的每个vector调用LRUKNode(k)--emplace_back(k) 构造出 LRUKNode(k)

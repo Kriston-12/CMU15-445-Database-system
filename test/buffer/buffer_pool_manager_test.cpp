@@ -262,9 +262,12 @@ TEST(BufferPoolManagerTest, PageAccessTest) {
     for (size_t i = 0; i < rounds; i++) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
       auto guard = bpm->WritePage(pid);
+      // std::cout << "Now i is " << i << std::endl;
       CopyString(guard.GetDataMut(), std::to_string(i));
     }
   });
+
+  // std::cout << "After write page in PageAccessTest" << std::endl;
 
   for (size_t i = 0; i < rounds; i++) {
     // Wait for a bit before taking the latch, allowing the writer to write some stuff.
@@ -335,7 +338,7 @@ TEST(BufferPoolManagerTest, DeadlockTest) {
   const auto pid0 = bpm->NewPage();
   const auto pid1 = bpm->NewPage();
 
-  auto guard0 = bpm->WritePage(pid0);
+  auto guard0 = bpm->WritePage(pid0); // t0 获取 frame0，unlock bpm
 
   // A crude way of synchronizing threads, but works for this small case.
   std::atomic<bool> start = false;
@@ -345,22 +348,23 @@ TEST(BufferPoolManagerTest, DeadlockTest) {
     start.store(true);
 
     // Attempt to write to page 0.
-    const auto guard0 = bpm->WritePage(pid0);
+    const auto guard0 = bpm->WritePage(pid0);  // t1 获取frame0失败，无法释放bpm lock，等待frame0被释放
   });
 
   // Wait for the other thread to begin before we start the test.
-  while (!start.load()) {
+  while (!start.load()) { // t0在t1被创建之后直接通过这个while
   }
 
   // Make the other thread wait for a bit.
   // This mimics the main thread doing some work while holding the write latch on page 0.
-  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // t0等待1 sec
 
   // If your latching mechanism is incorrect, the next line of code will deadlock.
   // Think about what might happen if you hold a certain "all-encompassing" latch for too long...
 
   // While holding page 0, take the latch on page 1.
-  const auto guard1 = bpm->WritePage(pid1);
+  const auto guard1 = bpm->WritePage(pid1);   // t0 尝试获取bpm lock，但是t1 在frame0的获取阶段还没有释放bpm lock，
+                                              // 同时t0还持有frame0的rwlatch，这导致了t0想要获取bpmlock，但是t1由于不能获取到frame0的rwlatch，从而不能释放bpm lock导致mutual dependency--以至于死锁
 
   // Let the child thread have the page 0 since we're done with it.
   guard0.Drop();
