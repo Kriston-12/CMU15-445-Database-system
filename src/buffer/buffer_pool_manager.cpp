@@ -35,12 +35,7 @@ auto FrameHeader::GetData() const -> const char * { return data_.data(); }
  *
  * @return char* A pointer to mutable data that the frame stores.
  */
-auto FrameHeader::GetDataMut() -> char * { 
-  // rwlatch_.lock();
-  // is_dirty_ = true; 
-  // rwlatch_.unlock();
-  return data_.data(); 
-}
+auto FrameHeader::GetDataMut() -> char * { return data_.data(); }
 
 /**
  * @brief Resets a `FrameHeader`'s member fields.

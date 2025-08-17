@@ -117,9 +117,12 @@ class BPlusTree {
 
   void BatchOpsFromFile(const std::filesystem::path &file_name);
 
-  auto FindKeyBiSearch(const InternalPage *page, const KeyType &key) -> int;
+  auto FindKeyBiSearch(const BPlusTreePage *page, const KeyType &key) -> int;
   auto LeafIndexToInsert(const LeafPage *page, const KeyType &key) -> int;
   auto ShiftRightByOne(LeafPage* page, int insert_index) -> void;
+  auto SplitLeaf(LeafPage* leaf_page, const KeyType& key, const ValueType& value, LeafPage* new_leaf_page, KeyType& sepKey) -> void;
+  auto InsertIntoInternal(InternalPage* parent, KeyType& sep_key, page_id_t new_child_page_id) -> void;
+  auto SplitInternal(InternalPage* left, KeyType& sep_key, InternalPage* right, page_id_t new_child_page, KeyType& up) -> void;
 
  private:
   void ToGraph(page_id_t page_id, const BPlusTreePage *page, std::ofstream &out);

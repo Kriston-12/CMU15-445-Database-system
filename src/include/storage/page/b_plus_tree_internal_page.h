@@ -64,6 +64,8 @@ class BPlusTreeInternalPage : public BPlusTreePage {
 
   auto ValueAt(int index) const -> ValueType;
 
+  auto SetValueAt(int index, const ValueType& value) -> void;
+
   /**
    * @brief For test only, return a string representing all keys in
    * this internal page, formatted as "(key1,key2,key3,...)"
@@ -89,11 +91,12 @@ class BPlusTreeInternalPage : public BPlusTreePage {
 
     return kstr;
   }
-
- private:
-  // Array members for page data.
   KeyType key_array_[INTERNAL_PAGE_SLOT_CNT];
   ValueType page_id_array_[INTERNAL_PAGE_SLOT_CNT];
+ private:
+  // Array members for page data.
+  // KeyType key_array_[INTERNAL_PAGE_SLOT_CNT];
+  // ValueType page_id_array_[INTERNAL_PAGE_SLOT_CNT];
   // (Spring 2025) Feel free to add more fields and helper functions below if needed
 };
 
