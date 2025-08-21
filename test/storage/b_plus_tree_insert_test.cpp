@@ -23,17 +23,20 @@ namespace bustub {
 
 using bustub::DiskManagerUnlimitedMemory;
 
-TEST(BPlusTreeTests, DISABLED_BasicInsertTest) {
+TEST(BPlusTreeTests, BasicInsertTest) {
   // create KeyComparator and index schema
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
 
   auto disk_manager = std::make_unique<DiskManagerUnlimitedMemory>();
   auto *bpm = new BufferPoolManager(50, disk_manager.get());
+  
   // allocate header_page
   page_id_t page_id = bpm->NewPage();
   // create b+ tree
   BPlusTree<GenericKey<8>, RID, GenericComparator<8>> tree("foo_pk", page_id, bpm, comparator, 2, 3);
+  // std::cout << "First draw tree" << std::endl;
+  // std::cout << tree.DrawBPlusTree() << std::endl;
   GenericKey<8> index_key;
   RID rid;
 
@@ -42,6 +45,9 @@ TEST(BPlusTreeTests, DISABLED_BasicInsertTest) {
   rid.Set(static_cast<int32_t>(key), value);
   index_key.SetFromInteger(key);
   tree.Insert(index_key, rid);
+
+  // std::cout << "Second draw tree" << std::endl;
+  // std::cout << tree.DrawBPlusTree() << std::endl;
 
   auto root_page_id = tree.GetRootPageId();
   auto root_page_guard = bpm->ReadPage(root_page_id);
@@ -74,9 +80,16 @@ TEST(BPlusTreeTests, DISABLED_InsertTest1NoIterator) {
   for (auto key : keys) {
     int64_t value = key & 0xFFFFFFFF;
     rid.Set(static_cast<int32_t>(key >> 32), value);
+    // std::cout << static_cast<int32_t>(key >> 32) << std::endl;
+    // std::cout << value << std::endl;
+    std::cout << tree.DrawBPlusTree() << std::endl;
     index_key.SetFromInteger(key);
     tree.Insert(index_key, rid);
   }
+
+  std::cout << "draw tree after 5 keys" << std::endl; 
+  // tree.Print(bpm);
+  std::cout << tree.DrawBPlusTree() << std::endl; // 报错
 
   bool is_present;
   std::vector<RID> rids;
@@ -95,7 +108,7 @@ TEST(BPlusTreeTests, DISABLED_InsertTest1NoIterator) {
   delete bpm;
 }
 
-TEST(BPlusTreeTests, DISABLED_InsertTest2) {
+TEST(BPlusTreeTests, InsertTest2) {
   // create KeyComparator and index schema
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
@@ -115,6 +128,7 @@ TEST(BPlusTreeTests, DISABLED_InsertTest2) {
     rid.Set(static_cast<int32_t>(key >> 32), value);
     index_key.SetFromInteger(key);
     tree.Insert(index_key, rid);
+    std::cout << tree.DrawBPlusTree() << std::endl;
   }
 
   std::vector<RID> rids;

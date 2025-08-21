@@ -120,9 +120,11 @@ class BPlusTree {
   auto FindKeyBiSearch(const BPlusTreePage *page, const KeyType &key) -> int;
   auto LeafIndexToInsert(const LeafPage *page, const KeyType &key) -> int;
   auto ShiftRightByOne(LeafPage* page, int insert_index) -> void;
-  auto SplitLeaf(LeafPage* leaf_page, const KeyType& key, const ValueType& value, LeafPage* new_leaf_page, KeyType& sepKey) -> void;
+  auto SplitLeaf(LeafPage* leaf_page, const KeyType& key, const ValueType& value, LeafPage* new_leaf_page, page_id_t right_id, KeyType& sepKey) -> void;
   auto InsertIntoInternal(InternalPage* parent, KeyType& sep_key, page_id_t new_child_page_id) -> void;
   auto SplitInternal(InternalPage* left, KeyType& sep_key, InternalPage* right, page_id_t new_child_page, KeyType& up) -> void;
+  auto KeySlotLowerBound(const InternalPage *p, const KeyType &x) -> int;
+  
 
  private:
   void ToGraph(page_id_t page_id, const BPlusTreePage *page, std::ofstream &out);
@@ -162,6 +164,8 @@ struct PrintableBPlusTree {
       std::vector<PrintableBPlusTree *> new_que;
 
       for (auto &t : que) {
+        std::cout << "printable b+tree size: " << t->size_ << std::endl;
+        std::cout << "pritntable b+tree key size: "<< t->keys_.size() << std::endl;
         int padding = (t->size_ - t->keys_.size()) / 2;
         out_buf << std::string(padding, ' ');
         out_buf << t->keys_;

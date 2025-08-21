@@ -94,6 +94,25 @@ auto BPLUSTREE_TYPE::FindKeyBiSearch(const BPlusTreePage *page, const KeyType &k
   return -1;
 }
 
+// 返回 key 槽位 j ∈ [1..C]，lower_bound(x) on key[1..C-1]
+// j == C 表示“插到最后一个 key 的后面”
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::KeySlotLowerBound(const InternalPage* p, const KeyType &x) -> int {
+  const int c = p->GetSize();
+  if (c <= 1) return 1; //没有key,默认从1开始插入
+  int l = 1, r = c - 1, ans = c;
+  while (l <= r) {
+    int m = (l + r) >> 1;
+    if (comparator_(p->KeyAt(m), x) >= 0) { // key[m] >= x
+      ans = m, r = m - 1;
+    }
+    else {
+      l = m + 1;
+    }
+  }
+  return ans;
+}
+
 /**
  * @brief Return the only value that associated with input key
  *
@@ -182,7 +201,7 @@ auto BPLUSTREE_TYPE::ShiftRightByOne(LeafPage* leaf_page, int insertIndex) -> vo
 
 // 左边只用修改size无需修改Key/ValueArray
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::SplitLeaf(LeafPage* left, const KeyType& key, const ValueType& value, LeafPage* right, KeyType& sep_key) -> void {
+auto BPLUSTREE_TYPE::SplitLeaf(LeafPage* left, const KeyType& key, const ValueType& value, LeafPage* right, page_id_t right_id, KeyType& sep_key) -> void {
   const int n = left->GetSize();
   const int left_sz = (n + 2) / 2; // total = n + 1, left_size = (total + 1) / 2 = (n + 2) / 2
   const int right_sz = n + 1 - left_sz;
@@ -234,6 +253,11 @@ auto BPLUSTREE_TYPE::SplitLeaf(LeafPage* left, const KeyType& key, const ValueTy
 
   sep_key = right->KeyAt(0);
   // 维护链表指针：right->SetNextPageId(left->GetNextPageId()); left->SetNextPageId(right_id);
+  // std::cout << left->GetNextPageId() << std::endl;
+  // std::cout << right->GetNextPageId() << std::endl;
+  right->SetNextPageId(left->GetNextPageId()); left->SetNextPageId(right_id);
+  // std::cout << left->GetNextPageId() << std::endl;
+  // std::cout << right->GetNextPageId() << std::endl;
 }
 
 INDEX_TEMPLATE_ARGUMENTS
@@ -253,7 +277,7 @@ auto BPLUSTREE_TYPE::SplitInternal(InternalPage* left, KeyType& sep_key, Interna
   }
 
   // Unlike that for key_array, the first parameter below does not have "+1", and we are moving "right_keys + 1" elements
-  std::memmove(right->page_id_array_, left->page_id_array_ + mid, sizeof(KeyType) * (right_keys + 1));
+  std::memmove(right->page_id_array_, left->page_id_array_ + mid, sizeof(page_id_t) * (right_keys + 1));
   right->SetSize(right_keys + 1);
   left->SetSize(mid); // up key由于在 index = mid位置，会被自动忽略掉，因为left现在的size变成了mid，最后一个index是mid - 1
 
@@ -261,23 +285,23 @@ auto BPLUSTREE_TYPE::SplitInternal(InternalPage* left, KeyType& sep_key, Interna
   // sep < up, 左边，else 右边
   if (comparator_(sep_key, up) < 0) {
     // insert to the left
-    int pos = FindKeyBiSearch(left, sep_key);
+    int pos = KeySlotLowerBound(left, sep_key);
 
     int nleft = mid;
     std::memmove(left->key_array_ + (pos + 1), left->key_array_ + pos, sizeof(KeyType) * (nleft - pos));
     std::memmove(left->page_id_array_ + (pos + 1), left->page_id_array_ + pos, sizeof(page_id_t) * (nleft - pos));
     left->SetKeyAt(pos, sep_key);
-    left->page_id_array_[pos] = new_child_page_id;
+    left->page_id_array_[pos + 1] = new_child_page_id;
     left->SetSize(nleft + 1);
   }
   else {
-    int pos = FindKeyBiSearch(right, sep_key);
+    int pos = KeySlotLowerBound(right, sep_key);
     int nright = right->GetSize();
 
     std::memmove(right->key_array_ + pos + 1, right->key_array_ + pos, sizeof(KeyType) * (nright - pos));
-    std::memmove(right->page_id_array_ + pos + 1, right->page_id_array_ + pos, sizeof(KeyType) * (nright - pos));
+    std::memmove(right->page_id_array_ + pos + 1, right->page_id_array_ + pos, sizeof(page_id_t) * (nright - pos));
     right->SetKeyAt(pos, sep_key);
-    right->page_id_array_[pos] = new_child_page_id;
+    right->page_id_array_[pos + 1] = new_child_page_id;
     right->SetSize(nright + 1);
   }
 
@@ -287,12 +311,13 @@ auto BPLUSTREE_TYPE::SplitInternal(InternalPage* left, KeyType& sep_key, Interna
 
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::InsertIntoInternal(InternalPage* parent, KeyType& sep_key, page_id_t new_child_page_id) -> void {
-  int pos = FindKeyBiSearch(parent, sep_key);
+  int pos = KeySlotLowerBound(parent, sep_key);
+  // std::cout << "InsertIntoInternal " << pos << std::endl;
   int n = parent->GetSize();
 
   // keys: [pos..n-1] → [pos+1..n]
   std::memmove(parent->key_array_ + pos + 1, parent->key_array_ + pos, sizeof(KeyType) * (n - pos));
-  std::memmove(parent->page_id_array_ + pos + 1, parent->page_id_array_ + pos, sizeof(KeyType) * (n - pos));
+  std::memmove(parent->page_id_array_ + pos + 1, parent->page_id_array_ + pos, sizeof(page_id_t) * (n - pos));
   parent->SetKeyAt(pos, sep_key);
   parent->page_id_array_[pos] = new_child_page_id;
   parent->SetSize(n + 1);
@@ -359,10 +384,12 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
 
     // split root
     KeyType sep{};
-    auto right_leaf_Guard = bpm_->WritePage(bpm_->NewPage());
+    auto right_leaf_id = bpm_->NewPage();
+    auto right_leaf_Guard = bpm_->WritePage(right_leaf_id);
     auto right_leaf = right_leaf_Guard.AsMut<LeafPage>();
+    
     right_leaf->Init(leaf_max_size_);
-    SplitLeaf(leaf, key, value, right_leaf, sep);
+    SplitLeaf(leaf, key, value, right_leaf, right_leaf_id, sep);
 
     page_id_t new_root_id = bpm_->NewPage();
     auto new_root_guard = bpm_->WritePage(new_root_id);
@@ -372,7 +399,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
     new_root->SetSize(2);
     new_root->SetKeyAt(1, sep);
     new_root->SetValueAt(0, ctx.write_set_.back().GetPageId());
-    new_root->SetValueAt(1, new_root_id);
+    new_root->SetValueAt(1, right_leaf_id);
 
     ctx.header_page_->AsMut<BPlusTreeHeaderPage>()->root_page_id_ = new_root_id;
     return true;
@@ -388,7 +415,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
   while (!page->IsLeafPage()) {
     auto parent = static_cast<const InternalPage *>(page);
     int idx = FindKeyBiSearch(page, key);
-    if (idx != -1) {return false;}
+    // if (idx != -1) {return false;}  // 不应在 internal 命中就视为重复
     page_id_t cid = parent->ValueAt(idx);
 
     // child_idx.push_back(idx);
@@ -397,7 +424,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
     path.push_back(cid);
 
     // lab crabbing：子页“安全”（这里只讨论无回撤的读路径，是否安全在叶子阶段再说），可以释放更高的祖先读锁
-    if (parent->GetSize() < parent->GetMaxSize() && ctx.read_set_.size() > 2) {
+    if (parent->GetSize() <= parent->GetMaxSize() && ctx.read_set_.size() > 2) {
       ctx.read_set_.pop_front();
     }
 
@@ -422,10 +449,11 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
 
   // 2.5 叶子已经满了: 叶子分裂并准备向上插入分隔键
   KeyType sep{};
-  auto new_leaf_guard = bpm_->WritePage(bpm_->NewPage());
+  auto right_page_id = bpm_->NewPage();
+  auto new_leaf_guard = bpm_->WritePage(right_page_id);
   auto new_leaf = new_leaf_guard.AsMut<LeafPage>();
   new_leaf->Init(leaf_max_size_);
-  SplitLeaf(leaf, key, value, new_leaf, sep);
+  SplitLeaf(leaf, key, value, new_leaf, right_page_id, sep);
   page_id_t new_child_id = new_leaf_guard.GetPageId(); // 插入到parent中的新的right child
   
   // from bottom to top: 将(sep, new_child_id) 插入parent
@@ -441,7 +469,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
       auto root_guard = bpm_->WritePage(ctx.root_page_id_);
       auto root = root_guard.AsMut<InternalPage>();
       // int ins = FindKeyBiSearch(root, sep) + 1; // ins是insert的index + 1的位置
-      if (root->GetSize() < root->GetMaxSize()) {
+      if (root->GetSize() <= root->GetMaxSize()) { // 这里的 "<=" 和下面
         InsertIntoInternal(root, sep, new_child_id);
         return true;
       }
@@ -460,7 +488,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
       new_root->SetSize(2);
       new_root->SetKeyAt(1, up);
       new_root->SetValueAt(0, ctx.root_page_id_);
-      new_root->SetValueAt(1, new_root_id);
+      new_root->SetValueAt(1, right_guard.GetPageId());
       ctx.header_page_->AsMut<BPlusTreeHeaderPage>()->root_page_id_ = new_root_id;
 
       return true;
@@ -468,10 +496,19 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
 
     // root非leaf，自下而上分裂
     page_id_t parent_id = path[path.size() - 2];  // path[path.size() - 1] 是child，已经被升级wlatch
+    if (ctx.read_set_.back().GetPageId() == ctx.root_page_id_) {
+      if (!ctx.header_page_.has_value()) {
+        ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
+      }
+      // ctx.read_set_.pop_back();
+    }
+    ctx.read_set_.pop_back();
     ctx.write_set_.push_back(bpm_->WritePage(parent_id));
     auto parent = ctx.write_set_.back().AsMut<InternalPage>();
 
-    if (parent->GetSize() < parent->GetMaxSize()) {  // parent未满，leaf insert多出的node是可以安全放入parent中的，无需循环往上，后续直接return
+    if (parent->GetSize() <= parent->GetMaxSize()) {  // parent未满，leaf insert多出的node是可以安全放入parent中的，无需循环往上，后续直接return
+                                                      // 这里是 "<=" 而不是 "<"的原因是 GetSize()返回的是keySize + 1，而GetMaxSize()返回的是max keySize, 
+                                                      // 所以只要当 keySize + 1 <= maxKeySize, 也就是 keySize < maxKeySize就可以直接insert
       InsertIntoInternal(parent, sep, new_child_id);
       return true;
     }
