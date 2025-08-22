@@ -269,6 +269,7 @@ void BPLUSTREE_TYPE::BatchOpsFromFile(const std::filesystem::path &file_name) {
         std::cerr << "Unknown instruction: " << instruction << std::endl;
         break;
     }
+    std::cout << DrawBPlusTree() << std::endl;
   }
   if (input.bad()) {
     std::cerr << "Error reading file: " << file_name << std::endl;

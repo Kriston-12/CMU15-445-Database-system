@@ -1,0 +1,12 @@
+i1 i2 i3 i4 i5 i6 i7 
+i8 i9 i11 i12 i15 i16 i17 
+i18 i21 i32 i41 i51 i61 i71 
+i19 i20 i31 i44 i52 i62 i72 
+i13 i22 i33 i43 i53 i63 i73 
+i14 i22 i34 i45 i54 i63 i73 
+i26 i36 i46 i56 i66 i76 
+i27 i37 i47 i57 i67 i77 
+i28 i38 i48 i58 i68 i78 
+i29 i39 i49 i59 i69 i79 
+i80 i81 i82 i83 i84 i85
+i120

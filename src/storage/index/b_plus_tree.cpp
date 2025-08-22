@@ -263,7 +263,7 @@ auto BPLUSTREE_TYPE::SplitLeaf(LeafPage* left, const KeyType& key, const ValueTy
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::SplitInternal(InternalPage* left, KeyType& sep_key, InternalPage* right, page_id_t new_child_page_id, KeyType& up) -> void {
   const int n = left->GetSize();
-  int mid = n / 2;
+  int mid = (n + 1) / 2;
   up = left->KeyAt(mid);
 
   // int pos = FindKeyBiSearch(left, sep_key); 
@@ -291,7 +291,7 @@ auto BPLUSTREE_TYPE::SplitInternal(InternalPage* left, KeyType& sep_key, Interna
     std::memmove(left->key_array_ + (pos + 1), left->key_array_ + pos, sizeof(KeyType) * (nleft - pos));
     std::memmove(left->page_id_array_ + (pos + 1), left->page_id_array_ + pos, sizeof(page_id_t) * (nleft - pos));
     left->SetKeyAt(pos, sep_key);
-    left->page_id_array_[pos + 1] = new_child_page_id;
+    left->page_id_array_[pos] = new_child_page_id;
     left->SetSize(nleft + 1);
   }
   else {
@@ -301,7 +301,7 @@ auto BPLUSTREE_TYPE::SplitInternal(InternalPage* left, KeyType& sep_key, Interna
     std::memmove(right->key_array_ + pos + 1, right->key_array_ + pos, sizeof(KeyType) * (nright - pos));
     std::memmove(right->page_id_array_ + pos + 1, right->page_id_array_ + pos, sizeof(page_id_t) * (nright - pos));
     right->SetKeyAt(pos, sep_key);
-    right->page_id_array_[pos + 1] = new_child_page_id;
+    right->page_id_array_[pos] = new_child_page_id;
     right->SetSize(nright + 1);
   }
 
@@ -502,7 +502,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
       }
       // ctx.read_set_.pop_back();
     }
-    ctx.read_set_.pop_back();
+    ctx.read_set_.pop_back(); 
     ctx.write_set_.push_back(bpm_->WritePage(parent_id));
     auto parent = ctx.write_set_.back().AsMut<InternalPage>();
 
@@ -519,6 +519,23 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
     auto new_internal = new_internal_guard.AsMut<InternalPage>();
     new_internal->Init(internal_max_size_);
     SplitInternal(parent, sep, new_internal, new_child_id, up); 
+
+    if (parent_id == ctx.root_page_id_) {
+      if (!ctx.header_page_.has_value()) { 
+        ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
+      }
+      auto new_root_id = bpm_->NewPage();
+      auto new_root_guard = bpm_->WritePage(new_root_id);
+      auto new_root_page = new_root_guard.AsMut<InternalPage>();
+      new_root_page->Init(internal_max_size_);
+      new_root_page->SetSize(2);
+      new_root_page->SetKeyAt(1, up);
+      new_root_page->SetValueAt(0, parent_id);
+      new_root_page->SetValueAt(1, new_internal_guard.GetPageId());
+
+      ctx.header_page_->AsMut<BPlusTreeHeaderPage>()->root_page_id_ = new_root_id;
+      return true;
+    }
 
     // 将(up, new_internal_id)向上一层插入
     sep = up;
