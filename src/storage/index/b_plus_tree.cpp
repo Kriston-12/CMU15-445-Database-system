@@ -462,9 +462,14 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
     if (path.size() == 1) {  //root被分裂
       // root 是internal
       // ctx header write-latch需要更新ctx.root_page_id_
+      ctx.read_set_.clear();
+      ctx.write_set_.clear();
       if (!ctx.header_page_.has_value()) { //按理来说这里不可能发生
         ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
       }
+
+      // 可能期间 root 被别人换了，重读一下
+      ctx.root_page_id_ = ctx.header_page_->As<BPlusTreeHeaderPage>()->root_page_id_;
 
       auto root_guard = bpm_->WritePage(ctx.root_page_id_);
       auto root = root_guard.AsMut<InternalPage>();
@@ -497,12 +502,18 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
     // root非leaf，自下而上分裂
     page_id_t parent_id = path[path.size() - 2];  // path[path.size() - 1] 是child，已经被升级wlatch
     if (ctx.read_set_.back().GetPageId() == ctx.root_page_id_) {
+      // 先放掉在身上的页锁, 不然此时获取到了header锁的thread在等待root的释放，没有这两行那么这个thread就会持续等待root，然后下面代码持续等待header，就会卡死
+      ctx.read_set_.clear();
+      ctx.write_set_.clear();
       if (!ctx.header_page_.has_value()) {
         ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
       }
       // ctx.read_set_.pop_back();
+      // 可能期间 root 被别人换了，重读一下
+      ctx.root_page_id_ = ctx.header_page_->As<BPlusTreeHeaderPage>()->root_page_id_;
     }
-    ctx.read_set_.pop_back(); 
+    
+    if (!ctx.read_set_.empty()) {ctx.read_set_.pop_back();}; 
     ctx.write_set_.push_back(bpm_->WritePage(parent_id));
     auto parent = ctx.write_set_.back().AsMut<InternalPage>();
 
@@ -521,9 +532,13 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
     SplitInternal(parent, sep, new_internal, new_child_id, up); 
 
     if (parent_id == ctx.root_page_id_) {
+      // 先放掉在身上的页锁
+      ctx.read_set_.clear();
+      ctx.write_set_.clear();
       if (!ctx.header_page_.has_value()) { 
         ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
       }
+      ctx.root_page_id_ = ctx.header_page_->As<BPlusTreeHeaderPage>()->root_page_id_;
       auto new_root_id = bpm_->NewPage();
       auto new_root_guard = bpm_->WritePage(new_root_id);
       auto new_root_page = new_root_guard.AsMut<InternalPage>();
