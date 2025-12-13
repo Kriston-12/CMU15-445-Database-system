@@ -196,6 +196,14 @@ auto BPLUSTREE_TYPE::ShiftRightByOne(LeafPage* leaf_page, int insertIndex) -> vo
   // }
   std::memmove(leaf_page->key_array_ + insertIndex + 1, leaf_page->key_array_ + insertIndex, sizeof(KeyType) * (size - insertIndex));
   std::memmove(leaf_page->rid_array_ + insertIndex + 1, leaf_page->rid_array_ + insertIndex, sizeof(KeyType) * (size - insertIndex));
+  std::memmove(leaf_page->rid_array_ + insertIndex + 1, leaf_page->rid_array_ + insertIndex, sizeof(ValueType) * (size - insertIndex));
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::ShiftLeftByOne(LeafPage* leaf_page, int removeIndex) -> void {
+  int size = leaf_page->GetSize();
+  std::memmove(leaf_page->key_array_ + removeIndex, leaf_page->key_array_ + removeIndex + 1, sizeof(KeyType) * (size - removeIndex - 1));
+  std::memmove(leaf_page->rid_array_ + removeIndex, leaf_page->rid_array_ + removeIndex + 1, sizeof(ValueType) * (size - removeIndex - 1));
 }
 
 
@@ -460,11 +468,16 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
   while (true) {
     //是否有parent
     if (path.size() == 1) {  //root被分裂
+    if (path.size() == 1) {  //root可能被分裂
       // root 是internal
       // ctx header write-latch需要更新ctx.root_page_id_
       ctx.read_set_.clear();
       ctx.write_set_.clear();
       if (!ctx.header_page_.has_value()) { //按理来说这里不可能发生
+      
+      // ctx释放了所有的读写锁并且还没有获取到下面的header锁的这个过程中，别的thread可能会对root进行修改
+      // 如果其他requests将b+ tree删除到只剩下root为leaf, 那么下面的InsertIntoInternal会出错，因为root不是internal page了
+      if (!ctx.header_page_.has_value()) { // 这里可能发生。 如果header有value，那么是之前循环中parent为root并且sep需要被insert到parent中，所以获取了锁
         ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
       }
 
@@ -475,6 +488,7 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
       auto root = root_guard.AsMut<InternalPage>();
       // int ins = FindKeyBiSearch(root, sep) + 1; // ins是insert的index + 1的位置
       if (root->GetSize() <= root->GetMaxSize()) { // 这里的 "<=" 和下面
+      if (root->GetSize() < root->GetMaxSize()) { 
         InsertIntoInternal(root, sep, new_child_id);
         return true;
       }
@@ -518,8 +532,12 @@ auto BPLUSTREE_TYPE::Insert(const KeyType &key, const ValueType &value) -> bool 
     auto parent = ctx.write_set_.back().AsMut<InternalPage>();
 
     if (parent->GetSize() <= parent->GetMaxSize()) {  // parent未满，leaf insert多出的node是可以安全放入parent中的，无需循环往上，后续直接return
+    if (parent->GetSize() < parent->GetMaxSize()) {  // parent未满，leaf insert多出的node是可以安全放入parent中的，无需循环往上，后续直接return
                                                       // 这里是 "<=" 而不是 "<"的原因是 GetSize()返回的是keySize + 1，而GetMaxSize()返回的是max keySize, 
                                                       // 所以只要当 keySize + 1 <= maxKeySize, 也就是 keySize < maxKeySize就可以直接insert
+                                                      // 又想了想，严格意义上来说，这里不能是 "<=", 对比value--page 插入更为直观
+                                                      // GetSize()返回的是key对应的page数目，GetMaxSize()返回的是max page的数目
+                                                      // 所以必须是 "<", 不能是 "<="
       InsertIntoInternal(parent, sep, new_child_id);
       return true;
     }
