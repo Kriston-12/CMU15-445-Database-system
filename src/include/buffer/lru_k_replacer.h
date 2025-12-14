@@ -68,13 +68,6 @@ class LRUKNode {
 
   size_t getEarliestTime() {return history.front();}
 
-  // size_t getKDis() const {
-  //   if (alreadyHasKAccess()) {
-  //     return history.front();
-  //   }
-  //   return std::numeric_limits<size_t>::max();
-  // }
-
   void reset() {
     isEvictable = false;
     isRemoved = true;

@@ -87,6 +87,12 @@ class BPlusTree {
   // Insert a key-value pair into this B+ tree.
   auto Insert(const KeyType &key, const ValueType &value) -> bool;
 
+  // Insert using top-down split and bottom-up insert (simple implementation).
+  auto InsertUpDown(const KeyType &key, const ValueType &value) -> bool;
+
+  // Insert using top-down preemptive splits (optional alternative implementation)--strictly correct.
+  auto InsertPreemptive(const KeyType &key, const ValueType &value) -> bool;
+
   // Remove a key and its value from this B+ tree.
   void Remove(const KeyType &key);
 
@@ -125,6 +131,17 @@ class BPlusTree {
   auto SplitInternal(InternalPage* left, KeyType& sep_key, InternalPage* right, page_id_t new_child_page, KeyType& up) -> void;
   auto KeySlotLowerBound(const InternalPage *p, const KeyType &x) -> int;
   
+  auto insert_into_empty_tree(Context &ctx, const KeyType &key, const ValueType &value) -> bool;
+  auto split_child_preemptive(WritePageGuard &parent_guard, WritePageGuard &child_guard, const KeyType &key,
+                              const std::optional<ValueType> &value_if_leaf) -> page_id_t;
+  auto split_root_preemptive(WritePageGuard &old_root_guard, const KeyType &key, const ValueType &value) -> page_id_t;
+  auto probe_to_leaf_read_only(Context &ctx, const KeyType &key, const ValueType &value, const BPlusTreePage *page)-> bool;
+  
+
+  // helper functions for Remove()
+  auto ShiftLeftByOne(LeafPage* leaf_page, int removeIndex) -> void;
+  auto BorrowFromLeftLeafPage(LeafPage *page, LeafPage* left_page, InternalPage* parent_page, int index) -> void;
+  auto BorrowFromLeftInternalPage(InternalPage *page, InternalPage* left_page, InternalPage* parent_page, int index) -> void;
 
  private:
   void ToGraph(page_id_t page_id, const BPlusTreePage *page, std::ofstream &out);
