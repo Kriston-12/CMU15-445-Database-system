@@ -62,7 +62,7 @@ TEST(BPlusTreeTests, BasicInsertTest) {
   delete bpm;
 }
 
-TEST(BPlusTreeTests, DISABLED_InsertTest1NoIterator) {
+TEST(BPlusTreeTests, DISABLED1_InsertTest1NoIterator) {
   // create KeyComparator and index schema
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
@@ -82,12 +82,12 @@ TEST(BPlusTreeTests, DISABLED_InsertTest1NoIterator) {
     rid.Set(static_cast<int32_t>(key >> 32), value);
     // std::cout << static_cast<int32_t>(key >> 32) << std::endl;
     // std::cout << value << std::endl;
-    std::cout << tree.DrawBPlusTree() << std::endl;
+    // std::cout << tree.DrawBPlusTree() << std::endl;
     index_key.SetFromInteger(key);
     tree.Insert(index_key, rid);
   }
 
-  std::cout << "draw tree after 5 keys" << std::endl; 
+  // std::cout << "draw tree after 5 keys" << std::endl; 
   // tree.Print(bpm);
   std::cout << tree.DrawBPlusTree() << std::endl; // 报错
 
@@ -168,7 +168,7 @@ TEST(BPlusTreeTests, DISABLED_InsertTest2) {
 
 // Below are customized test
 
-TEST(BPlusTreeTests, customized_insert_test) {
+TEST(BPlusTreeTests, DISABLED1_customized_insert_test) {
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
 
@@ -182,9 +182,9 @@ TEST(BPlusTreeTests, customized_insert_test) {
   tree.BatchOpsFromFile("/home/kris/CMU15-445/CMU15-445-Database-system/test/storage/debug-txt/insert-four-depth.txt");
   
 
-  std::cout << "draw tree after 5 keys" << std::endl; 
+  // std::cout << "draw tree after 5 keys" << std::endl; 
   // tree.Print(bpm);
-  std::cout << tree.DrawBPlusTree() << std::endl; // 报错
+  std::cout << tree.DrawBPlusTree() << std::endl; 
 
   delete bpm;
 }

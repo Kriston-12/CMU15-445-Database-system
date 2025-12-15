@@ -142,6 +142,8 @@ class BPlusTree {
   auto ShiftLeftByOne(LeafPage* leaf_page, int removeIndex) -> void;
   auto BorrowFromLeftLeafPage(LeafPage *page, LeafPage* left_page, InternalPage* parent_page, int index) -> void;
   auto BorrowFromLeftInternalPage(InternalPage *page, InternalPage* left_page, InternalPage* parent_page, int index) -> void;
+  auto MergeWithLeft(BPlusTreePage *page, BPlusTreePage *left_page, InternalPage *parent_page, int index) -> void;
+  auto MergeWithRight(BPlusTreePage *page, BPlusTreePage *right_page, InternalPage *parent_page, int index) -> void;
 
  private:
   void ToGraph(page_id_t page_id, const BPlusTreePage *page, std::ofstream &out);
@@ -158,6 +160,7 @@ class BPlusTree {
   int leaf_max_size_;
   int internal_max_size_;
   page_id_t header_page_id_;
+  std::vector<bool> path; // NOLINT
 };
 
 /**
@@ -181,8 +184,8 @@ struct PrintableBPlusTree {
       std::vector<PrintableBPlusTree *> new_que;
 
       for (auto &t : que) {
-        std::cout << "printable b+tree size: " << t->size_ << std::endl;
-        std::cout << "pritntable b+tree key size: "<< t->keys_.size() << std::endl;
+        // std::cout << "printable b+tree size: " << t->size_ << std::endl;
+        // std::cout << "pritntable b+tree key size: "<< t->keys_.size() << std::endl;
         int padding = (t->size_ - t->keys_.size()) / 2;
         out_buf << std::string(padding, ' ');
         out_buf << t->keys_;

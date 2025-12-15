@@ -694,10 +694,11 @@ INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::probe_to_leaf_read_only(Context &ctx, const KeyType &key, 
                                             const ValueType &value,
                                             const BPlusTreePage* page) -> bool {
-  (void)value;
+  // (void)value;
 
   while (!page->IsLeafPage()) {
     auto parent = static_cast<const InternalPage *>(page);
+    this->path.push_back(true);
     if (parent->GetSize() >= parent->GetMaxSize()) {
       // Parent is not safe to receive a split.
       return true;
@@ -708,6 +709,7 @@ auto BPLUSTREE_TYPE::probe_to_leaf_read_only(Context &ctx, const KeyType &key,
     ctx.read_set_.push_back(bpm_->ReadPage(child_page_id));
     page = ctx.read_set_.back().As<BPlusTreePage>();
 
+    if (this->path.size() > 2) {ctx.read_set_.pop_front(); this->path.pop_back();}  // Release grandparent lock
     // Conservative: if we ever see a full internal page on the path, we will need write-mode.
     if (!page->IsLeafPage() && page->GetSize() == page->GetMaxSize()) {
       return true;
@@ -767,7 +769,7 @@ auto BPLUSTREE_TYPE::InsertPreemptive(const KeyType &key, const ValueType &value
       bool need_write = probe_to_leaf_read_only(ctx, key, value, root_page);
       if (!need_write) {
         page_id_t leaf_id = ctx.read_set_.back().GetPageId();
-        ctx.read_set_.clear();
+        ctx.read_set_.pop_back();
 
         WritePageGuard leaf_guard = bpm_->WritePage(leaf_id);
         auto *leaf = leaf_guard.AsMut<LeafPage>();
@@ -863,212 +865,285 @@ auto BPLUSTREE_TYPE::InsertPreemptive(const KeyType &key, const ValueType &value
   }
 }
 
-// /*****************************************************************************
-//  * REMOVE
-//  *****************************************************************************/
+/*****************************************************************************
+ * REMOVE
+ *****************************************************************************/
 
-// // Borrow the rightmost element from the left_page, and update the key that points to the right page as the changed leftmost key in the right page
-// INDEX_TEMPLATE_ARGUMENTS
-// auto BPLUSTREE_TYPE::BorrowFromLeftLeafPage(LeafPage *page, LeafPage* left_page, InternalPage* parent_page, int index) -> void {
-//   // parent必然是internal
+// Borrow the rightmost element from the left_page, and update the key that points to the right page as the changed leftmost key in the right page
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::BorrowFromLeftLeafPage(LeafPage *page, LeafPage* left_page, InternalPage* parent_page, int index) -> void {
+  // parent必然是internal
   
-//   int size = page->GetSize();
-//   int left_size = left_page->GetSize();
+  int size = page->GetSize();
+  int left_size = left_page->GetSize();
 
-//   // 如果page是leaf，那么getsize返回的是key的大小，否则返回keySize + 1
-//   ShiftRightByOne(page, 0);
-//   page->SetKeyAt(0, left_page->KeyAt(left_size - 1));
-//   page->SetValueAt(0, left_page->ValueAt(left_size - 1));
-//   page->SetSize(size + 1);
-//   left_page->SetSize(left_size - 1);
-//   parent_page->SetKeyAt(index, page->KeyAt(0));
-// }
+  // 如果page是leaf，那么getsize返回的是key的大小，否则返回keySize + 1
+  ShiftRightByOne(page, 0);
+  page->SetKeyAt(0, left_page->KeyAt(left_size - 1));
+  page->SetValueAt(0, left_page->ValueAt(left_size - 1));
+  page->SetSize(size + 1);
+  left_page->SetSize(left_size - 1);
+  parent_page->SetKeyAt(index, page->KeyAt(0));
+}
 
-// // Right page pulls the key from its parent and then use it as its leftmost key. Borrow the rightmost key of left page as its leftmost key.
-// // The parent will change the corresponding key to the newer rightmost key of the leftpage
-// INDEX_TEMPLATE_ARGUMENTS
-// auto BPLUSTREE_TYPE::BorrowFromLeftInternalPage(InternalPage *page, InternalPage* left_page, InternalPage* parent_page, int index) -> void {
-//   int size = page->GetSize();
-//   int left_size = left_page->GetSize();
-//   ShiftRightByOne(page, 0);
-//   page->SetKeyAt(1, parent_page->KeyAt(index));
-//   page->SetValueAt(0, left_page->KeyAt(left_size - 1));
-//   page->SetSize(size + 1);
+// Right page pulls the key from its parent and then use it as its leftmost key. Borrow the rightmost key of left page as its leftmost key.
+// The parent will change the corresponding key to the newer rightmost key of the leftpage
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::BorrowFromLeftInternalPage(InternalPage *page, InternalPage* left_page, InternalPage* parent_page, int index) -> void {
+  int size = page->GetSize();
+  int left_size = left_page->GetSize();
+  ShiftRightByOne(page, 0);
+  page->SetKeyAt(1, parent_page->KeyAt(index));
+  page->SetValueAt(0, left_page->KeyAt(left_size - 1));
+  page->SetSize(size + 1);
   
-//   // parent changes the key to the rightmost key of the leftpage
-//   parent_page-SetKey(index, left_page->KeyAt(left_size - 1));
-//   left_page->SetSize(left_page - 1);
-// }
+  // parent changes the key to the rightmost key of the leftpage
+  parent_page-SetKey(index, left_page->KeyAt(left_size - 1));
+  left_page->SetSize(left_page - 1);
+}
 
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::MergeWithLeft(BPlusTreePage *page, BPlusTreePage *left_page, InternalPage *parent_page,
+                                                                                  int index) -> void 
+{
+  int left_size = left_page->GetSize();
+  int size = page->GetSize();
+  int parent_size = parent_page->GetSize();
+  // auto parent_internal = static_cast<InternalPage *>(parent_page);
+  
+  if (page->IsLeafPage()) {
+    auto leaf_page = static_cast<LeafPage *>(page);
+    auto left_leaf_page = static_cast<LeafPage *>(left_page);
 
-// /**
-//  * @brief Delete key & value pair associated with input key
-//  * If current tree is empty, return immediately.
-//  * If not, User needs to first find the right leaf page as deletion target, then
-//  * delete entry from leaf page. Remember to deal with redistribute or merge if
-//  * necessary.
-//  *
-//  * @param key input key
-//  */
+    std::memmove(left_leaf_page->key_array_ + left_size, leaf_page->key_array_, sizeof(KeyType) * size);
+    std::memmove(left_leaf_page->rid_array_ + left_size, leaf_page->rid_array_, sizeof(ValueType) * size);
+    left_leaf_page->SetSize(left_size + size);
+    left_leaf_page->SetNextPageId(leaf_page->GetNextPageId());
+  }
+  else {
+    auto internal_page = static_cast<InternalPage *>(page);
+    auto left_internal_page = static_cast<InternalPage *>(left_page);
+
+    // pull down the separating key from parent
+    left_internal_page->SetKeyAt(left_size, parent_internal->KeyAt(index));
+
+    // left_size + 1 is because we just pulled down one key from parent
+    // e.g. internal_size = 7, left_key_size = 3, value_size = 4, right_key_size = 2, value_size = 3
+    // after merge, left_key_size = 3 + 1 + 2 = 6, value_size = 4 + 2 + 1 = 7
+    std::memmove(left_internal_page->key_array_ + left_size + 1, internal_page->key_array_ + 1, sizeof(KeyType) * (size - 1));
+    std::memmove(left_internal_page->page_id_array_ + left_size + 1, internal_page->page_id_array_, sizeof(page_id_t) * size);
+
+    left_internal_page->SetSize(left_size + size);
+  }
+  // say parent has invalid,0,1,2,3,4 keys and 0,1,2,3,4,5 pointers, 
+  // remove index=3; key = 2, value = 3
+  // we need to move keys 3,4 to 2,3 and pointers 4,5 to 3,4
+  std::memmove(parent_page->key_array_ + index, parent_page->key_array_ + index + 1, sizeof(KeyType) * (parent_size - index - 1));
+  std::memmove(parent_page->page_id_array_ + index, parent_page->page_id_array_ + index + 1, sizeof(page_id_t) * (parent_size - index - 1));
+  parent_page->SetSize(parent_size - 1);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::MergeWithRight(BPlusTreePage *page, BPlusTreePage *right_page, InternalPage *parent_page,
+                                                                                  int index) -> void 
+{
+  int right_size = right_page->GetSize();
+  int size = page->GetSize();
+  int parent_size = parent_page->GetSize();
+  // auto parent_internal = static_cast<InternalPage *>(parent_page);
+  
+  if (page->IsLeafPage()) {
+    auto leaf_page = static_cast<LeafPage *>(page);
+    auto right_leaf_page = static_cast<LeafPage *>(right_page);
+
+    std::memmove(leaf_page->key_array_ + size, right_leaf_page->key_array_, sizeof(KeyType) * right_size);
+    std::memmove(leaf_page->rid_array_ + size, right_leaf_page->rid_array_, sizeof(ValueType) * right_size);
+    right_leaf_page->SetSize(right_size + size);
+    leaf_page->SetNextPageId(right_leaf_page->GetNextPageId());
+  }
+  else {
+    auto internal_page = static_cast<InternalPage *>(page);
+    auto right_internal_page = static_cast<InternalPage *>(right_page);
+
+    // pull down the separating key from parent
+    internal_page->SetKeyAt(size, parent_internal->KeyAt(index));
+
+    std::memmove(internal_page->key_array_ + size + 1, right_internal_page->key_array_ + 1, sizeof(KeyType) * (right_size - 1));
+    std::memmove(internal_page->page_id_array_ + size + 1, right_internal_page->page_id_array_, sizeof(page_id_t) * right_size);
+
+    left_internal_page->SetSize(left_size + size);
+  }
+  std::memmove(parent_page->key_array_ + index, parent_page->key_array_ + index + 1, sizeof(KeyType) * (parent_size - index - 1));
+  std::memmove(parent_page->page_id_array_ + index, parent_page->page_id_array_ + index + 1, sizeof(page_id_t) * (parent_size - index - 1));
+  parent_page->SetSize(parent_size - 1);
+}
+
+/**
+ * @brief Delete key & value pair associated with input key
+ * If current tree is empty, return immediately.
+ * If not, User needs to first find the right leaf page as deletion target, then
+ * delete entry from leaf page. Remember to deal with redistribute or merge if
+ * necessary.
+ *
+ * @param key input key
+ */
 INDEX_TEMPLATE_ARGUMENTS
 void BPLUSTREE_TYPE::Remove(const KeyType &key) {
-//   // Declaration of context instance.
-//   Context ctx;
+  // Declaration of context instance.
+  Context ctx;
 
-//   WritePageGuard head_guard = bpm_->WritePage(header_page_id_);
-//   ctx.root_page_id_ = read_head_guard.As<BPlusTreeHeaderPage>()->root_page_id_;
+  WritePageGuard head_guard = bpm_->WritePage(header_page_id_);
+  ctx.root_page_id_ = read_head_guard.As<BPlusTreeHeaderPage>()->root_page_id_;
 
-//   if (ctx.root_page_id_ == INVALID_PAGE_ID) {return;}
+  if (ctx.root_page_id_ == INVALID_PAGE_ID) {return;}
 
-//   // 1) 乐观阶段：只要叶子“就地删除”后不下溢，且不需要改父分隔键，就直接完成
-//   std::vector<page_id_t> path; // 这个path，同insert中的path，可以设置为b+tree的一个attribute，不然每次insert调用都需要vector allocation
-//   std::vector<int> idx_path; // child在parent中的index--给 borrow/merge的parent使用，这个也应该放在class中作为attribute
-//   ctx.read_set_.push_back(bpm_->ReadPage(ctx.root_page_id_));
-//   auto page = ctx.read_set_.back().As<BPlusTreePage>();
+  // 1) 乐观阶段：只要叶子“就地删除”后不下溢，且不需要改父分隔键，就直接完成
+  std::vector<page_id_t> path; // 这个path，同insert中的path，可以设置为b+tree的一个attribute，不然每次insert调用都需要vector allocation
+  std::vector<int> idx_path; // child在parent中的index--给 borrow/merge的parent使用，这个也应该放在class中作为attribute
+  ctx.read_set_.push_back(bpm_->ReadPage(ctx.root_page_id_));
+  auto page = ctx.read_set_.back().As<BPlusTreePage>();
   
-//   // root是leaf，直接升级为write, 并且直接从leaf/root中删除此key
-//   if (page->IsLeafPage()) {
-//     ctx.read_set_.pop_back();
-//     ctx.write_set_.push_back(bpm_->WritePage(ctx.root_page_id_));
-//     page = ctx.write_set_.back().AsMut<BPlusTreePage>();
+  // root是leaf，直接升级为write, 并且直接从leaf/root中删除此key
+  if (page->IsLeafPage()) {
+    ctx.read_set_.pop_back();
+    ctx.write_set_.push_back(bpm_->WritePage(ctx.root_page_id_));
+    page = ctx.write_set_.back().AsMut<BPlusTreePage>();
 
-//     int n = page->GetSize();
-//     int pos = LeafIndexToInsert(page, key);
-//     if ((comparator_(page->KeyAt(pos), key) == 0)) {return};  // pos最大等于 n - 1, 最小等于0, 这里的意思是如果没有该key，直接返回
-//     ShiftLeftByOne(page, pos);
-//     page->SetSize(n - 1);
+    int n = page->GetSize();
+    int pos = LeafIndexToInsert(page, key);
+    if ((comparator_(page->KeyAt(pos), key) == 0)) {return};  // pos最大等于 n - 1, 最小等于0, 这里的意思是如果没有该key，直接返回
+    ShiftLeftByOne(page, pos);
+    page->SetSize(n - 1);
 
-//     // root 被删空 → root = INVALID
-//     if(page->GetSize() == 0) {
-//       head_guard.AsMut<BPlusTreeHeaderPage>()->root_page_id_ = INVALID_PAGE_ID; 
-//     }
-//     return;
-//   }
+    // root 被删空 → root = INVALID
+    if(page->GetSize() == 0) {
+      head_guard.AsMut<BPlusTreeHeaderPage>()->root_page_id_ = INVALID_PAGE_ID; 
+    }
+    return;
+  }
   
-//   // 确认root并非leaf，可以先释放header_guard, 我们仍持有root的锁，所以安全
-//   auto parent = nullptr;
-//   head_guard.Drop();
-//   while (!page->IsLeafPage()) {
-//     parent = static_cast<InternalPage *>(page);
-//     int idx = FindKeyBiSearch(page, key);
+  // 确认root并非leaf，可以先释放header_guard, 我们仍持有root的锁，所以安全
+  auto parent = nullptr;
+  head_guard.Drop();
+  while (!page->IsLeafPage()) {
+    parent = static_cast<InternalPage *>(page);
+    int idx = FindKeyBiSearch(page, key);
     
-//     page_id_t cid = parent->ValueAt(idx);
+    page_id_t cid = parent->ValueAt(idx);
 
-//     ctx.read_set_.push_back(bpm_->ReadPage(cid));
-//     page = ctx.read_set_.back().As<BPlusTreePage>();
-//     path.push_back(cid);
-//     idx_path.push_back(idx);
+    ctx.read_set_.push_back(bpm_->ReadPage(cid));
+    page = ctx.read_set_.back().As<BPlusTreePage>();
+    path.push_back(cid);
+    idx_path.push_back(idx);
 
-//     if (parent->GetSize() - 1 > parent->GetMaxSize() && ctx.read_set_.size() > 2) { // the first condition means 即使child 有merge，parent 删除node之后也不会影响grand parent
-//       ctx.read_set_.pop_front();
-//     }
-//   }
+    if (parent->GetSize() - 1 > parent->GetMaxSize() && ctx.read_set_.size() > 2) { // the first condition means 即使child 有merge，parent 删除node之后也不会影响grand parent
+      ctx.read_set_.pop_front();
+    }
+  }
 
-//   // 升级cid为wlatch
-//   page_id_t leaf_id = path.back();
-//   ctx.read_set_.pop_back();
-//   ctx.write_set_.push_back(bpm_->WritePage(leaf_id));
-//   page = ctx.write_set_.back().As<BPlusTreePage>();
+  // 升级cid为wlatch
+  page_id_t leaf_id = path.back();
+  ctx.read_set_.pop_back();
+  ctx.write_set_.push_back(bpm_->WritePage(leaf_id));
+  page = ctx.write_set_.back().As<BPlusTreePage>();
 
-//   // 尝试就地删除
-//   int n = page->GetSize();
-//   int pos = LeafIndexToInsert(page, key);
-//   if (comparator_(leaf->KeyAt(pos), key) == 0) {
-//     return;
-//   }
+  // 尝试就地删除
+  int n = page->GetSize();
+  int pos = LeafIndexToInsert(page, key);
+  if (comparator_(leaf->KeyAt(pos), key) == 0) {
+    return;
+  }
 
-//   const bool will_underflow = (n - 1) < page->GetMinSize();
-//   const bool delete_is_first = (pos == 0); // if this is true, we gotta change the key in the parent_page
-//   const bool has_parent = (path.size() > 1); //因为我们之前处理过page is leaf的情况，这里page应该是100% has parent
+  const bool will_underflow = (n - 1) < page->GetMinSize();
+  const bool delete_is_first = (pos == 0); // if this is true, we gotta change the key in the parent_page
+  const bool has_parent = (path.size() > 1); //因为我们之前处理过page is leaf的情况，这里page应该是100% has parent
 
-//   // 获得被delete的key在parent中的位置
-//   int idx = idx_path.back();
+  // 获得被delete的key在parent中的位置
+  int idx = idx_path.back();
 
-//   // has parent百分百触发，因为root = leaf的情况已经讨论过了
-//   if (!will_underflow && has_parent) {
-//     if (!delete_is_first) {
-//       // 叶子直接正常删除
-//       ShiftLeftByOne(page, pos);
-//       page->SetSize(n - 1);
-//       return;
-//     }
-//     else {
-//       ShiftLeftByOne(page, pos);
-//       page->SetSize(n - 1);
-//       auto parent_page_id = ctx.read_set_.back().GetPageId();
-//       if (parent_page_id == ctx.root_page_id_) { // parent是root，那么首先需要获取header的写锁
-//         ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
-//       }
-//       // 将parent中指向child的位置的key设置成child中最左边的key
-//       parent.SetKeyAt(idx, page->KeyAt(0));
-//       return;
-//     }
-//   }
+  // has parent百分百触发，因为root = leaf的情况已经讨论过了
+  if (!will_underflow && has_parent) {
+    if (!delete_is_first) {
+      // 叶子直接正常删除
+      ShiftLeftByOne(page, pos);
+      page->SetSize(n - 1);
+      return;
+    }
+    else {
+      ShiftLeftByOne(page, pos);
+      page->SetSize(n - 1);
+      auto parent_page_id = ctx.read_set_.back().GetPageId();
+      if (parent_page_id == ctx.root_page_id_) { // parent是root，那么首先需要获取header的写锁
+        ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
+      }
+      // 将parent中指向child的位置的key设置成child中最左边的key
+      parent.SetKeyAt(idx, page->KeyAt(0));
+      return;
+    }
+  }
 
-//   //接下来是Underflow = true需要merge/borrow的复杂情况, 先delete. 然后处理leaf，最后进入进入while由下至上 判断borrow，如果不行再merge
-//   if (!delete_is_first) { // 无需改动parent
-//     ShiftLeftByOne(page, pos);
-//     page->SetSize(n - 1);
-//   }
-//   else {
-//     ShiftLeftByOne(page, pos);
-//     page->SetSize(n - 1);
-//     auto parent_page_id = ctx.read_set_.back().GetPageId();
-//     if (parent_page_id == ctx.root_page_id_) { // parent是root，那么首先需要获取header的写锁
-//       ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
-//     }
-//     parent.SetKeyAt(idx, page.KeyAt(0));
-//   }
+  //接下来是Underflow = true需要merge/borrow的复杂情况, 先delete. 然后处理leaf，最后进入进入while由下至上 判断borrow，如果不行再merge
+  if (!delete_is_first) { // 无需改动parent
+    ShiftLeftByOne(page, pos);
+    page->SetSize(n - 1);
+  }
+  else {
+    ShiftLeftByOne(page, pos);
+    page->SetSize(n - 1);
+    auto parent_page_id = ctx.read_set_.back().GetPageId();
+    if (parent_page_id == ctx.root_page_id_) { // parent是root，那么首先需要获取header的写锁
+      ctx.header_page_.emplace(bpm_->WritePage(header_page_id_));
+    }
+    parent.SetKeyAt(idx, page.KeyAt(0));
+  }
 
-//   // 处理leaf中borrow和merge的情况，后续的代码处理internal node中的merge 和borrow
-//   // left=leaf的情况：
-//   // leafsize > minsize: 1. left_page.getsize + page.getsize < leaf.maxsize, 直接pull parent中一个node，然后merge，parent少一个node，判断parent
-//   //                     2. left_page.getsize + page.getsize >= leaf.maxsize, 只能从left中pull一个node到right_page, 然后改parent直接返回
-//   // rightsize > minsize 1. 类似于left
-//   //                     2. 也类似
+  // 处理leaf中borrow和merge的情况，后续的代码处理internal node中的merge 和borrow
+  // left=leaf的情况：
+  // leafsize > minsize: 1. left_page.getsize + page.getsize < leaf.maxsize, 直接pull parent中一个node，然后merge，parent少一个node，判断parent
+  //                     2. left_page.getsize + page.getsize >= leaf.maxsize, 只能从left中pull一个node到right_page, 然后改parent直接返回
+  // rightsize > minsize 1. 类似于left
+  //                     2. 也类似
 
-//   WritePageGuard left_guard = bpm_->WritePage(parent_page->ValueAt(idx - 1));
-//   auto left_page = left_guard.AsMut<BPlusTreeLeafPage>();  // 因为当前page是leaf，那么它的left必然也是leaf
-//   ctx.write_set_.push_back(left_guard);
-//   if ( left_page->GetSize() > left_page->GetMinSize() ) {
-//     if (left_page->GetSize() + page->GetSize() >= page->GetMaxSize()) {  // NO merge should happen 
-//       BorrowFromLeft(page, static_cast<LeafPage*>(left_page), parent, idx);
-//     }
-//     else { // pull one key off the parent, merge with this key, left_page. (left_page + key + page). Parentsize - 1
-//       // 如果parent是root，需要拿到header_page_guard, 但是获取header_guard这个过程中可能有其他其他call获取到了header然后再等待root锁，那么这里会死锁
-//     }
+  WritePageGuard left_guard = bpm_->WritePage(parent_page->ValueAt(idx - 1));
+  auto left_page = left_guard.AsMut<BPlusTreeLeafPage>();  // 因为当前page是leaf，那么它的left必然也是leaf
+  ctx.write_set_.push_back(left_guard);
+  if ( left_page->GetSize() > left_page->GetMinSize() ) {
+    if (left_page->GetSize() + page->GetSize() >= page->GetMaxSize()) {  // NO merge should happen 
+      BorrowFromLeft(page, static_cast<LeafPage*>(left_page), parent, idx);
+    }
+    else { // pull one key off the parent, merge with this key, left_page. (left_page + key + page). Parentsize - 1
+      // 如果parent是root，需要拿到header_page_guard, 但是获取header_guard这个过程中可能有其他其他call获取到了header然后再等待root锁，那么这里会死锁
+    }
     
 
-//   }
+  }
   
   
-//   // 进入while，root必然不为leaf，无需考虑root的情况，因为leaf size < half的时候，自动上提，root直接成为leaf。那么下一次delete的request会自动被上面的if block处理
-//   while (true) {
-//     // 先判断是否可以左借，r
+  // 进入while，root必然不为leaf，无需考虑root的情况，因为leaf size < half的时候，自动上提，root直接成为leaf。那么下一次delete的request会自动被上面的if block处理
+  while (true) {
+    // 先判断是否可以左借，r
     
-//       WritePageGuard left_guard = bpm_->WritePage(parent_page->ValueAt(idx - 1));
-//       auto left_page = left_guard.AsMut<BPlusTreePage>();
+      WritePageGuard left_guard = bpm_->WritePage(parent_page->ValueAt(idx - 1));
+      auto left_page = left_guard.AsMut<BPlusTreePage>();
 
-//       // 后续是一下几种情况，
+      // 后续是一下几种情况，
       
-//       // left 是 internal 
+      // left 是 internal 
 
-//       // 如果满足left可以被borrow的要求, write_set_需持有left_guard, 从而修改
-//       if ( left_page->GetSize() > left_page->GetMinSize() ) {
-//         if (left_page->IsLeafPage()) { 
-//           ctx.write_set_.push_back(left_guard);
-//           BorrowFromLeft(page, static_cast<LeafPage*>(left_page), parent, idx);
-//           continue; //直接跳到下一回合无需看right_page
-//         }
-//         else { // left_page is an internal page, borrow or merge
-//           if (left->GetSize() + page->GetSize)
+      // 如果满足left可以被borrow的要求, write_set_需持有left_guard, 从而修改
+      if ( left_page->GetSize() > left_page->GetMinSize() ) {
+        if (left_page->IsLeafPage()) { 
+          ctx.write_set_.push_back(left_guard);
+          BorrowFromLeft(page, static_cast<LeafPage*>(left_page), parent, idx);
+          continue; //直接跳到下一回合无需看right_page
+        }
+        else { // left_page is an internal page, borrow or merge
+          if (left->GetSize() + page->GetSize)
 
-//         }
-//       }
-      
-    
-
-//   }
+        }
+      }
+    }
+  }
 }
 
 /*****************************************************************************
