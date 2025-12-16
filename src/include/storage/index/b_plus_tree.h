@@ -161,6 +161,7 @@ class BPlusTree {
   int internal_max_size_;
   page_id_t header_page_id_;
   std::vector<bool> path; // NOLINT
+  std::vector<int> idx_path; // probe时，child在parent中的index--给 borrow/merge的parent使用
 };
 
 /**
