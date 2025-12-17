@@ -141,7 +141,9 @@ class BPlusTree {
   // helper functions for Remove()
   auto ShiftLeftByOne(LeafPage* leaf_page, int removeIndex) -> void;
   auto BorrowFromLeftLeafPage(LeafPage *page, LeafPage* left_page, InternalPage* parent_page, int index) -> void;
+  auto BorrowFromRightLeafPage(LeafPage *page, LeafPage* right_page, InternalPage* parent_page, int index) -> void;
   auto BorrowFromLeftInternalPage(InternalPage *page, InternalPage* left_page, InternalPage* parent_page, int index) -> void;
+  auto BorrowFromRightInternalPage(InternalPage *page, InternalPage* right_page, InternalPage* parent_page, int index) -> void;
   auto MergeWithLeft(BPlusTreePage *page, BPlusTreePage *left_page, InternalPage *parent_page, int index) -> void;
   auto MergeWithRight(BPlusTreePage *page, BPlusTreePage *right_page, InternalPage *parent_page, int index) -> void;
 

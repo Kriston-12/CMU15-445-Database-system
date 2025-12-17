@@ -886,20 +886,52 @@ auto BPLUSTREE_TYPE::BorrowFromLeftLeafPage(LeafPage *page, LeafPage* left_page,
   parent_page->SetKeyAt(index, page->KeyAt(0));
 }
 
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::BorrowFromRightLeafPage(LeafPage *page, LeafPage* right_page, InternalPage* parent_page, int index) -> void {
+  int size = page->GetSize();
+  int right_size = right_page->GetSize();
+
+  page->SetKeyAt(size, right_page->KeyAt(0));
+  page->SetValueAt(size, right_page->ValueAt(0));
+  page->SetSize(size + 1);
+
+  ShiftRightByOne(right_page, 0);
+  right_page->SetSize(right_size - 1);
+  parent_page->SetKeyAt(index, right_page->KeyAt(0));
+}
+
 // Right page pulls the key from its parent and then use it as its leftmost key. Borrow the rightmost key of left page as its leftmost key.
 // The parent will change the corresponding key to the newer rightmost key of the leftpage
 INDEX_TEMPLATE_ARGUMENTS
 auto BPLUSTREE_TYPE::BorrowFromLeftInternalPage(InternalPage *page, InternalPage* left_page, InternalPage* parent_page, int index) -> void {
   int size = page->GetSize();
   int left_size = left_page->GetSize();
-  ShiftRightByOne(page, 0);
+
+  std::memmove(page->key_array_ + 1, page->key_array_, sizeof(KeyType) * size);
+  std::memmove(page->page_id_array_ + 1, page->page_id_array_, sizeof(page_id_t) * size);
   page->SetKeyAt(1, parent_page->KeyAt(index));
   page->SetValueAt(0, left_page->KeyAt(left_size - 1));
   page->SetSize(size + 1);
   
-  // parent changes the key to the rightmost key of the leftpage
-  parent_page-SetKey(index, left_page->KeyAt(left_size - 1));
-  left_page->SetSize(left_page - 1);
+  // parent changes the key to the rightmost key of the leftpage,
+  // namely the first key of page 
+  parent_page->SetKeyAt(index, left_page->KeyAt(left_size - 1));
+  left_page->SetSize(left_size - 1);
+}
+
+INDEX_TEMPLATE_ARGUMENTS
+auto BPLUSTREE_TYPE::BorrowFromRightInternalPage(InternalPage *page, InternalPage* right_page, InternalPage* parent_page, int index) -> void {
+  int size = page->GetSize();
+  int right_size = right_page->GetSize(); 
+
+  page->SetKeyAt(size, right_page->KeyAt(1));
+  page->SetValueAt(size, right_page->ValueAt(0));
+  page->SetSize(size + 1);
+
+  std::memmove(right_page->key_array_ + 1, right_page->key_array_ + 2, sizeof(KeyType) * (right_size - 2));
+  std::memmove(right_page->page_id_array_, right_page->page_id_array_ + 1, sizeof(page_id_t) * (right_size - 1));
+  parent_page->SetKeyAt(index, right_page->KeyAt(1));
+  right_page->SetSize(right_size - 1);
 }
 
 INDEX_TEMPLATE_ARGUMENTS
@@ -925,7 +957,7 @@ auto BPLUSTREE_TYPE::MergeWithLeft(BPlusTreePage *page, BPlusTreePage *left_page
     auto left_internal_page = static_cast<InternalPage *>(left_page);
 
     // pull down the separating key from parent
-    left_internal_page->SetKeyAt(left_size, parent_internal->KeyAt(index));
+    left_internal_page->SetKeyAt(left_size, parent_page->KeyAt(index));
 
     // left_size + 1 is because we just pulled down one key from parent
     // e.g. internal_size = 7, left_key_size = 3, value_size = 4, right_key_size = 2, value_size = 3
@@ -966,12 +998,12 @@ auto BPLUSTREE_TYPE::MergeWithRight(BPlusTreePage *page, BPlusTreePage *right_pa
     auto right_internal_page = static_cast<InternalPage *>(right_page);
 
     // pull down the separating key from parent
-    internal_page->SetKeyAt(size, parent_internal->KeyAt(index));
+    internal_page->SetKeyAt(size, parent_page->KeyAt(index));
 
     std::memmove(internal_page->key_array_ + size + 1, right_internal_page->key_array_ + 1, sizeof(KeyType) * (right_size - 1));
     std::memmove(internal_page->page_id_array_ + size + 1, right_internal_page->page_id_array_, sizeof(page_id_t) * right_size);
 
-    left_internal_page->SetSize(left_size + size);
+    internal_page->SetSize(size + right_size);
   }
   std::memmove(parent_page->key_array_ + index, parent_page->key_array_ + index + 1, sizeof(KeyType) * (parent_size - index - 1));
   std::memmove(parent_page->page_id_array_ + index, parent_page->page_id_array_ + index + 1, sizeof(page_id_t) * (parent_size - index - 1));
@@ -992,8 +1024,8 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
   // Declaration of context instance.
   Context ctx;
 
-  WritePageGuard head_guard = bpm_->WritePage(header_page_id_);
-  ctx.root_page_id_ = read_head_guard.As<BPlusTreeHeaderPage>()->root_page_id_;
+  auto head_guard = bpm_->WritePage(header_page_id_);
+  ctx.root_page_id_ = head_guard.As<BPlusTreeHeaderPage>()->root_page_id_;
 
   if (ctx.root_page_id_ == INVALID_PAGE_ID) {return;}
 
@@ -1006,23 +1038,23 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
   if (page->IsLeafPage()) {
     ctx.read_set_.pop_back();
     ctx.write_set_.push_back(bpm_->WritePage(ctx.root_page_id_));
-    page = ctx.write_set_.back().AsMut<BPlusTreePage>();
+    auto leaf = ctx.write_set_.back().AsMut<LeafPage>();
 
-    int n = page->GetSize();
-    int pos = LeafIndexToInsert(page, key);
-    if ((comparator_(page->KeyAt(pos), key) == 0)) {return};  // pos最大等于 n - 1, 最小等于0, 这里的意思是如果没有该key，直接返回
-    ShiftLeftByOne(page, pos);
-    page->SetSize(n - 1);
+    int n = leaf->GetSize();
+    int pos = LeafIndexToInsert(leaf, key);
+    if ((comparator_(leaf->KeyAt(pos), key) == 0)) {return;}  // pos最大等于 n - 1, 最小等于0, 这里的意思是如果没有该key，直接返回
+    ShiftLeftByOne(leaf, pos);
+    leaf->SetSize(n - 1);
 
     // root 被删空 → root = INVALID
-    if(page->GetSize() == 0) {
+    if(leaf->GetSize() == 0) {
       head_guard.AsMut<BPlusTreeHeaderPage>()->root_page_id_ = INVALID_PAGE_ID; 
     }
     return;
   }
   
   // 确认root并非leaf，可以先释放header_guard, 我们仍持有root的锁，所以安全
-  auto parent = nullptr;
+  BPlusTreePage* parent = nullptr;
   head_guard.Drop();
   while (!page->IsLeafPage()) {
     parent = static_cast<InternalPage *>(page);
@@ -1093,11 +1125,11 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
 
   // 然后是必须处理underflow的情况。不能采用从下至上的方式--因为会和上面的逻辑从上之下获取锁冲突，导致死锁
   // 所以需要restart probe获取写锁
-  WritePageGuard head_guard = bpm_->WritePage(header_page_id_);
+  auto head_guard = bpm_->WritePage(header_page_id_);
   ctx.header_page_ = std::make_optional(std::move(head_guard));
   ctx.root_page_id_ = ctx.header_page_->As<BPlusTreeHeaderPage>()->root_page_id_;
 
-  WritePageGuard root_guard = bpm_->WritePage(ctx.root_page_id_);
+  auto root_guard = bpm_->WritePage(ctx.root_page_id_);
   ctx.write_set_.push_back(std::move(root_guard));
   page = ctx.write_set_.back().AsMut<BPlusTreePage>();
   if (page->GetSize() > 2) {
@@ -1137,10 +1169,9 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
   std::memmove(leaf_page->rid_array_ + delete_pos, leaf_page->rid_array_ + delete_pos + 1, sizeof(ValueType) * (n - delete_pos - 1));
   leaf_page->SetSize(n - 1);
 
-
   page_id_t current_page_id = INVALID_PAGE_ID;
-  while (!ctx.write_set_.empty()) {
-    if (ctx.write_set_.size() == 1) {
+  while (true) {
+    if (ctx.write_set_.size() == 1) { // root_page
       auto root_page = ctx.write_set_.back().AsMut<BPlusTreePage>();
       if (root_page->IsLeafPage()) { 
         if (root_page->GetSize() == 0) {
@@ -1154,7 +1185,7 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
         bpm_->DeletePage(ctx.root_page_id_);
         ctx.header_page_->AsMut<BPlusTreeHeaderPage>()->root_page_id_ = current_page_id;
       }
-      // return; 
+      return; 
     }
     // exit if no underflow
     if (page->GetSize() >= page->GetMinSize()) {
@@ -1170,7 +1201,6 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
     if (idx > 0) {
       auto left_guard = bpm_->WritePage(parent_page->ValueAt(idx - 1));
       auto left_page = left_guard.AsMut<BPlusTreePage>();
-      // ctx.write_set_.push_back(std::move(left_guard));
       ctx.write_set_.emplace_back(left_guard); // should call move constructor by default
       if (left_page->GetSize() > left_page->GetMinSize()) {
         if (page->IsLeafPage()) {
@@ -1181,8 +1211,10 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
         }
         return;
       }
+      ctx.write_set_.pop_back(); // cannot borrow from left, remove left_guard
     }
 
+    // idx != Size - 1, because we wouldn't not have right sibling if idx == Size - 1
     if (idx < parent_page->GetSize() - 1) {
       auto right_guard = bpm_->WritePage(parent_page->ValueAt(idx + 1));
       auto right_page = right_guard.AsMut<BPlusTreePage>();
@@ -1190,14 +1222,35 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
       if (right_page->GetSize() > right_page->GetMinSize()) {
         // can borrow from right sibling
         if (page->IsLeafPage()) {
-          // BorrowFromRightLeafPage(static_cast<LeafPage *>(page), static_cast<LeafPage *>(right_page), parent_page, idx);
+          BorrowFromRightLeafPage(static_cast<LeafPage *>(page), static_cast<LeafPage *>(right_page), parent_page, idx);
         }
         else {
-          // BorrowFromRightInternalPage(static_cast<InternalPage *>(page), static_cast<InternalPage *>(right_page), parent_page, idx);
+          BorrowFromRightInternalPage(static_cast<InternalPage *>(page), static_cast<InternalPage *>(right_page), parent_page, idx);
         }
         return;
       }
+      ctx.write_set_.pop_back(); // cannot borrow from right, remove right_guard
     }
+
+    // cannot borrow from either side, try merge
+    if (idx > 0) {
+      auto left_guard = bpm_->WritePage(parent_page->ValueAt(idx - 1));
+      auto left_page = left_guard.AsMut<BPlusTreePage>();
+      ctx.write_set_.emplace_back(left_guard);
+      MergeWithLeft(page, left_page, parent_page, idx);
+      ctx.write_set_.pop_back(); // remove left_guard
+      bpm_->DeletePage(page->GetPageId());
+    }
+    else { // right merge
+      auto right_guard = bpm_->WritePage(parent_page->ValueAt(idx + 1));
+      auto right_page = right_guard.AsMut<BPlusTreePage>();
+      ctx.write_set_.emplace_back(right_guard);
+      MergeWithRight(page, right_page, parent_page, idx);
+      ctx.write_set_.pop_back(); // remove right_guard
+      bpm_->DeletePage(right_page->GetPageId());
+    }
+    this->idx_path.pop_back();
+    page = ctx.write_set_.back().AsMut<BPlusTreePage>(); // parent_page?
   }
 
   // //接下来是Underflow = true需要merge/borrow的复杂情况, 先delete. 然后处理leaf，最后进入进入while由下至上 判断borrow，如果不行再merge
