@@ -45,6 +45,7 @@ TEST(BPlusTreeTests, DISABLED_DeleteTestNoIterator) {
     index_key.SetFromInteger(key);
     tree.Insert(index_key, rid);
   }
+  // std::cout << tree.DrawBPlusTree() << std::endl;
 
   std::vector<RID> rids;
   for (auto key : keys) {
@@ -56,12 +57,15 @@ TEST(BPlusTreeTests, DISABLED_DeleteTestNoIterator) {
     int64_t value = key & 0xFFFFFFFF;
     EXPECT_EQ(rids[0].GetSlotNum(), value);
   }
+  std::cout << tree.DrawBPlusTree() << std::endl;
 
   std::vector<int64_t> remove_keys = {1, 5, 3, 4};
   for (auto key : remove_keys) {
     index_key.SetFromInteger(key);
     tree.Remove(index_key);
+    std::cout << tree.DrawBPlusTree() << std::endl;
   }
+  // std::cout << tree.DrawBPlusTree() << std::endl;
 
   int64_t size = 0;
   bool is_present;
@@ -69,6 +73,7 @@ TEST(BPlusTreeTests, DISABLED_DeleteTestNoIterator) {
   for (auto key : keys) {
     rids.clear();
     index_key.SetFromInteger(key);
+    std::cout << tree.DrawBPlusTree() << std::endl;
     is_present = tree.GetValue(index_key, &rids);
 
     if (!is_present) {
@@ -80,6 +85,7 @@ TEST(BPlusTreeTests, DISABLED_DeleteTestNoIterator) {
       ++size;
     }
   }
+  std::cout << tree.DrawBPlusTree() << std::endl;
   EXPECT_EQ(size, 1);
 
   // Remove the remaining key
@@ -91,7 +97,7 @@ TEST(BPlusTreeTests, DISABLED_DeleteTestNoIterator) {
   delete bpm;
 }
 
-TEST(BPlusTreeTests, DISABLED_SequentialEdgeMixTest) {  // NOLINT
+TEST(BPlusTreeTests, DISABLED1_SequentialEdgeMixTest) {  // NOLINT
   // create KeyComparator and index schema
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
@@ -117,6 +123,7 @@ TEST(BPlusTreeTests, DISABLED_SequentialEdgeMixTest) {  // NOLINT
       index_key.SetFromInteger(key);
       tree.Insert(index_key, rid);
       inserted.push_back(key);
+      std::cout << "After inserting " << key << ":\n" << tree.DrawBPlusTree() << std::endl;
       auto res = TreeValuesMatch<GenericKey<8>, RID, GenericComparator<8>>(tree, inserted, deleted);
       ASSERT_TRUE(res);
     }
