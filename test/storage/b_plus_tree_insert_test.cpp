@@ -82,9 +82,10 @@ TEST(BPlusTreeTests, DISABLED1_InsertTest1NoIterator) {
     rid.Set(static_cast<int32_t>(key >> 32), value);
     // std::cout << static_cast<int32_t>(key >> 32) << std::endl;
     // std::cout << value << std::endl;
-    // std::cout << tree.DrawBPlusTree() << std::endl;
+    
     index_key.SetFromInteger(key);
     tree.Insert(index_key, rid);
+    std::cout << tree.DrawBPlusTree() << std::endl;
   }
 
   // std::cout << "draw tree after 5 keys" << std::endl; 

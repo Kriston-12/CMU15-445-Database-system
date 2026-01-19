@@ -93,6 +93,8 @@ class BPlusTree {
   // Insert using top-down preemptive splits (optional alternative implementation)--strictly correct.
   auto InsertPreemptive(const KeyType &key, const ValueType &value) -> bool;
 
+  auto InsertUpDownRetry(const KeyType &key, const ValueType &value) -> bool;
+
   // Remove a key and its value from this B+ tree.
   void Remove(const KeyType &key);
 
