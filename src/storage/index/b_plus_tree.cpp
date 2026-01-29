@@ -89,7 +89,7 @@ auto BPLUSTREE_TYPE::FindKeyBiSearch(const BPlusTreePage *page, const KeyType &k
       }
       else {
         right = mid - 1;
-      }
+      } 
     }
   }
   return -1;
@@ -1170,9 +1170,9 @@ auto BPLUSTREE_TYPE::BorrowFromRightLeafPage(LeafPage *page, LeafPage* right_pag
   page->SetValueAt(size, right_page->ValueAt(0));
   page->SetSize(size + 1);
 
-  ShiftRightByOne(right_page, 0);
+  ShiftLeftByOne(right_page, 0);
   right_page->SetSize(right_size - 1);
-  parent_page->SetKeyAt(index, right_page->KeyAt(0));
+  parent_page->SetKeyAt(index + 1, right_page->KeyAt(0));
 }
 
 // Right page pulls the key from its parent and then use it as its leftmost key. Borrow the rightmost key of left page as its leftmost key.
@@ -1199,14 +1199,14 @@ auto BPLUSTREE_TYPE::BorrowFromRightInternalPage(InternalPage *page, InternalPag
   int size = page->GetSize();
   int right_size = right_page->GetSize(); 
 
-  page->SetKeyAt(size, right_page->KeyAt(1));
+  page->SetKeyAt(size, parent_page->KeyAt(index + 1));
   page->SetValueAt(size, right_page->ValueAt(0));
   page->SetSize(size + 1);
-
+  parent_page->SetKeyAt(index + 1, right_page->KeyAt(1));
   std::memmove(right_page->key_array_ + 1, right_page->key_array_ + 2, sizeof(KeyType) * (right_size - 2));
   std::memmove(right_page->page_id_array_, right_page->page_id_array_ + 1, sizeof(page_id_t) * (right_size - 1));
-  parent_page->SetKeyAt(index, right_page->KeyAt(1));
   right_page->SetSize(right_size - 1);
+  
 }
 
 INDEX_TEMPLATE_ARGUMENTS
@@ -1231,15 +1231,13 @@ auto BPLUSTREE_TYPE::MergeWithLeft(BPlusTreePage *page, BPlusTreePage *left_page
     auto internal_page = static_cast<InternalPage *>(page);
     auto left_internal_page = static_cast<InternalPage *>(left_page);
 
-    // pull down the separating key from parent
+    // pull down the separating key from parent, and set the corresponding value
     left_internal_page->SetKeyAt(left_size, parent_page->KeyAt(index));
+    left_internal_page->SetValueAt(left_size, internal_page->ValueAt(0));
 
-    // left_size + 1 is because we just pulled down one key from parent
-    // e.g. internal_size = 7, left_key_size = 3, value_size = 4, right_key_size = 2, value_size = 3
-    // after merge, left_key_size = 3 + 1 + 2 = 6, value_size = 4 + 2 + 1 = 7
     std::memmove(left_internal_page->key_array_ + left_size + 1, internal_page->key_array_ + 1, sizeof(KeyType) * (size - 1));
-    std::memmove(left_internal_page->page_id_array_ + left_size + 1, internal_page->page_id_array_, sizeof(page_id_t) * size);
-
+    std::memmove(left_internal_page->page_id_array_ + left_size + 1, internal_page->page_id_array_, sizeof(page_id_t) * (size - 1));
+    
     left_internal_page->SetSize(left_size + size);
   }
   // say parent has invalid,0,1,2,3,4 keys and 0,1,2,3,4,5 pointers, 
@@ -1265,25 +1263,28 @@ auto BPLUSTREE_TYPE::MergeWithRight(BPlusTreePage *page, BPlusTreePage *right_pa
 
     std::memmove(leaf_page->key_array_ + size, right_leaf_page->key_array_, sizeof(KeyType) * right_size);
     std::memmove(leaf_page->rid_array_ + size, right_leaf_page->rid_array_, sizeof(ValueType) * right_size);
-    right_leaf_page->SetSize(right_size + size);
+    leaf_page->SetSize(right_size + size);
     leaf_page->SetNextPageId(right_leaf_page->GetNextPageId());
   }
   else {
     auto internal_page = static_cast<InternalPage *>(page);
     auto right_internal_page = static_cast<InternalPage *>(right_page);
 
-    // pull down the separating key from parent
-    internal_page->SetKeyAt(size, parent_page->KeyAt(index));
+    // pull down the separating key from parent, and set the corresponding value
+    internal_page->SetKeyAt(size, parent_page->KeyAt(index + 1));
+    internal_page->SetValueAt(size, right_internal_page->ValueAt(0));
 
     std::memmove(internal_page->key_array_ + size + 1, right_internal_page->key_array_ + 1, sizeof(KeyType) * (right_size - 1));
-    std::memmove(internal_page->page_id_array_ + size + 1, right_internal_page->page_id_array_, sizeof(page_id_t) * right_size);
+    std::memmove(internal_page->page_id_array_ + size + 1, right_internal_page->page_id_array_ + 1, sizeof(page_id_t) * (right_size - 1));
 
     internal_page->SetSize(size + right_size);
   }
-  std::memmove(parent_page->key_array_ + index, parent_page->key_array_ + index + 1, sizeof(KeyType) * (parent_size - index - 1));
-  std::memmove(parent_page->page_id_array_ + index, parent_page->page_id_array_ + index + 1, sizeof(page_id_t) * (parent_size - index - 1));
+  // here we are removing index + 1 (right_page), so dest param below is index + 2
+  std::memmove(parent_page->key_array_ + index + 1, parent_page->key_array_ + index + 2, sizeof(KeyType) * (parent_size - index - 2));
+  std::memmove(parent_page->page_id_array_ + index + 1, parent_page->page_id_array_ + index + 2, sizeof(page_id_t) * (parent_size - index - 2));
   parent_page->SetSize(parent_size - 1);
 }
+
 
 /**
  * @brief Delete key & value pair associated with input key
@@ -1470,12 +1471,13 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
         // std::cout << left_page->GetSize() << " " << left_page->GetMinSize() << std::endl;
         if (op_page->IsLeafPage()) {
           // leafPage = ctx.write_set_.back().AsMut<LeafPage>();
-          BorrowFromLeftLeafPage(leafPage, static_cast<LeafPage *>(left_page), parent_page, idx);
+          auto cur_page = static_cast<LeafPage *>(op_page);
+          BorrowFromLeftLeafPage(cur_page, static_cast<LeafPage *>(left_page), parent_page, idx);
           // std::cout << this->DrawBPlusTree() << std::endl;
         }
         else {
-          auto internal_page = ctx.write_set_.back().AsMut<BPlusTreePage>();
-          BorrowFromLeftInternalPage(static_cast<InternalPage *>(internal_page), static_cast<InternalPage *>(left_page), parent_page, idx - 1);
+          auto cur_page = static_cast<InternalPage *>(op_page);
+          BorrowFromLeftInternalPage(cur_page, static_cast<InternalPage *>(left_page), parent_page, idx - 1);
         }
         return;
       }
@@ -1491,11 +1493,12 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
         // can borrow from right sibling
         if (op_page->IsLeafPage()) {
           // leafPage = ctx.write_set_.back().AsMut<LeafPage>();
-          BorrowFromRightLeafPage(leafPage, static_cast<LeafPage *>(right_page), parent_page, idx);
+          auto cur_page = static_cast<LeafPage *>(op_page);
+          BorrowFromRightLeafPage(cur_page, static_cast<LeafPage *>(right_page), parent_page, idx);
         }
         else {
-          auto internal_page = ctx.write_set_.back().AsMut<BPlusTreePage>();  
-          BorrowFromRightInternalPage(static_cast<InternalPage *>(internal_page), static_cast<InternalPage *>(right_page), parent_page, idx);
+          auto cur_page = static_cast<InternalPage *>(op_page);
+          BorrowFromRightInternalPage(cur_page, static_cast<InternalPage *>(right_page), parent_page, idx);
         }
         return;
       }
@@ -1523,10 +1526,16 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
       
       ctx.write_set_.emplace_back(std::move(right_guard));
       MergeWithRight(op_page, right_page, parent_page, idx);
-      current_page_id = ctx.write_set_.back().GetPageId(); // after merge, the op_page is removed, so current_page_id is right_page's id
-      
+      page_id_t merged_page_id = ctx.write_set_.back().GetPageId(); // after merge, the right_page is removed, mark it for deletion
       ctx.write_set_.pop_back(); // remove right_guard
-      page_id_t merged_page_id = ctx.write_set_.back().GetPageId();
+      if (1) {
+        auto test_page = ctx.write_set_.back().AsMut<BPlusTreePage>();
+        if (test_page->GetSize() == 0) {
+          // should not happen
+        }
+      }
+     
+      current_page_id = ctx.write_set_.back().GetPageId(); // after merge, the right_page is removed, so current_page_id is op_page's id
       bpm_->DeletePage(merged_page_id);
     }
     // current_page_id = ctx.write_set_.back().GetPageId();

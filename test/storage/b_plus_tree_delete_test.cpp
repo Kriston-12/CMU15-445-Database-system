@@ -123,12 +123,12 @@ TEST(BPlusTreeTests, DISABLED1_SequentialEdgeMixTest) {  // NOLINT
       index_key.SetFromInteger(key);
       tree.Insert(index_key, rid);
       inserted.push_back(key);
-      // std::cout << "After inserting " << key << ":\n" << tree.DrawBPlusTree() << std::endl;
+      std::cout << "After inserting " << key << ":\n" << tree.DrawBPlusTree() << std::endl;
       auto res = TreeValuesMatch<GenericKey<8>, RID, GenericComparator<8>>(tree, inserted, deleted);
       ASSERT_TRUE(res);
     }
 
-    std::cout << "tree after insertion:\n" << tree.DrawBPlusTree() << std::endl;
+    // std::cout << "tree after insertion:\n" << tree.DrawBPlusTree() << std::endl;
 
     index_key.SetFromInteger(1);
     tree.Remove(index_key);
@@ -147,6 +147,7 @@ TEST(BPlusTreeTests, DISABLED1_SequentialEdgeMixTest) {  // NOLINT
     keys = {4, 14, 6, 2, 15, -2, -1, 3, 5, 25, 20};
     for (auto key : keys) {
       index_key.SetFromInteger(key);
+      std::cout << "Removing " << key << std::endl;
       tree.Remove(index_key);
       std::cout << "tree after removing " << key << ":\n" << tree.DrawBPlusTree() << std::endl;
       deleted.push_back(key);
