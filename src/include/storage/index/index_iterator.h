@@ -41,6 +41,11 @@ class IndexIterator {
 
  private:
   // add your own private member variables here
+  BufferPoolManager *bpm_;
+  std::pair<KeyType, ValueType> target_;
+  page_id_t current_page_id_;
+  int cur_index_;
 };
 
 }  // namespace bustub
+ 

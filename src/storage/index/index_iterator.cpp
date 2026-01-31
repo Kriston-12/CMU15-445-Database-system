@@ -24,7 +24,17 @@ namespace bustub {
  * set your own input parameters
  */
 INDEX_TEMPLATE_ARGUMENTS
-INDEXITERATOR_TYPE::IndexIterator() = default;
+INDEXITERATOR_TYPE::IndexIterator(BufferPoolManager *bpm, page_id_t page_id, int index)
+    : bpm_(bpm), current_page_id_(page_id), cur_index_(index) {
+  if (page_id == INVALID_PAGE_ID) {
+    // end iterator
+    return;
+  }
+  auto page_guard = bpm_->ReadPage(current_page_id_);
+  auto leaf_page = page_guard.As<B_PLUS_TREE_LEAF_PAGE_TYPE>();
+  target_.first = leaf_page->KeyAt(cur_index_);
+  target_.second = leaf_page->ValueAt(cur_index_);
+};
 
 INDEX_TEMPLATE_ARGUMENTS
 INDEXITERATOR_TYPE::~IndexIterator() = default;  // NOLINT
