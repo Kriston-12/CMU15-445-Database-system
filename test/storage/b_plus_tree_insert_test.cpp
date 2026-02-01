@@ -109,7 +109,7 @@ TEST(BPlusTreeTests, DISABLED1_InsertTest1NoIterator) {
   delete bpm;
 }
 
-TEST(BPlusTreeTests, DISABLED_InsertTest2) {
+TEST(BPlusTreeTests, DISABLED1_InsertTest2) {
   // create KeyComparator and index schema
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
@@ -169,7 +169,7 @@ TEST(BPlusTreeTests, DISABLED_InsertTest2) {
 
 // Below are customized test
 
-TEST(BPlusTreeTests, DISABLED1_customized_insert_test) {
+TEST(BPlusTreeTests, DISABLED_customized_insert_test) {
   auto key_schema = ParseCreateStatement("a bigint");
   GenericComparator<8> comparator(key_schema.get());
 

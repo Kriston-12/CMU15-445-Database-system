@@ -1517,8 +1517,6 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
       ctx.write_set_.pop_back(); // remove left_guard
       page_id_t merged_page_id = ctx.write_set_.back().GetPageId();
       bpm_->DeletePage(merged_page_id);
-      // std::cout << this->DrawBPlusTree() << std::endl;  
-      // ctx.write_set_.pop_back(); // go back to parent_page
     }
     else { // right merge
       WritePageGuard right_guard = bpm_->WritePage(parent_page->ValueAt(idx + 1));
@@ -1528,12 +1526,6 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
       MergeWithRight(op_page, right_page, parent_page, idx);
       page_id_t merged_page_id = ctx.write_set_.back().GetPageId(); // after merge, the right_page is removed, mark it for deletion
       ctx.write_set_.pop_back(); // remove right_guard
-      if (1) {
-        auto test_page = ctx.write_set_.back().AsMut<BPlusTreePage>();
-        if (test_page->GetSize() == 0) {
-          // should not happen
-        }
-      }
      
       current_page_id = ctx.write_set_.back().GetPageId(); // after merge, the right_page is removed, so current_page_id is op_page's id
       bpm_->DeletePage(merged_page_id);
@@ -1558,7 +1550,30 @@ void BPLUSTREE_TYPE::Remove(const KeyType &key) {
  * @return : index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::Begin() -> INDEXITERATOR_TYPE { UNIMPLEMENTED("TODO(P2): Add implementation."); }
+auto BPLUSTREE_TYPE::Begin() -> INDEXITERATOR_TYPE {
+  // find the leftmost leaf page
+  page_id_t page_id;
+  {
+    auto guard = bpm_->ReadPage(header_page_id_);
+    auto header_page = guard.As<BPlusTreeHeaderPage>();
+    page_id = header_page->root_page_id_;
+    if (page_id == INVALID_PAGE_ID) {
+      return End(); // empty tree
+    }
+  }
+
+  ReadPageGuard page_guard = bpm_->ReadPage(page_id);
+  auto page = page_guard.As<BPlusTreePage>();
+  while (!page->IsLeafPage()) {
+    auto internal_page = static_cast<const InternalPage*>(page);
+    page_id = internal_page->ValueAt(0);
+    page_guard = bpm_->ReadPage(page_id);
+    page = page_guard.As<BPlusTreePage>();
+  }
+
+  // auto leaf_page = static_cast<const LeafPage*>(page);
+  return INDEXITERATOR_TYPE(bpm_, page_id, 0);
+}
 
 /**
  * @brief Input parameter is low key, find the leaf page that contains the input key
@@ -1566,7 +1581,34 @@ auto BPLUSTREE_TYPE::Begin() -> INDEXITERATOR_TYPE { UNIMPLEMENTED("TODO(P2): Ad
  * @return : index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::Begin(const KeyType &key) -> INDEXITERATOR_TYPE { UNIMPLEMENTED("TODO(P2): Add implementation."); }
+auto BPLUSTREE_TYPE::Begin(const KeyType &key) -> INDEXITERATOR_TYPE { 
+
+  page_id_t page_id;
+  {
+    auto header_guard = bpm_->ReadPage(header_page_id_);
+    auto header_page = header_guard.As<BPlusTreeHeaderPage>();
+    page_id = header_page->root_page_id_;
+    if (page_id == INVALID_PAGE_ID) {
+      return INDEXITERATOR_TYPE(bpm_, -1, -1); // empty tree
+    }
+  }
+  ReadPageGuard page_guard = bpm_->ReadPage(page_id);
+  auto page = page_guard.As<BPlusTreePage>();
+  while (!page->IsLeafPage()) {
+    auto internal_page = static_cast<const InternalPage*>(page);
+    int idx = FindKeyBiSearch(page, key);
+    page_id = internal_page->ValueAt(idx);
+    page_guard = bpm_->ReadPage(page_id);
+    page = page_guard.As<BPlusTreePage>();
+  }
+  
+  auto leaf_page = static_cast<const LeafPage*>(page);
+  int idx = LeafIndexToInsert(leaf_page, key);
+  // if (idx == leaf_page->GetSize() || comparator_(leaf_page->KeyAt(idx), key) != 0) {
+  //   return End(); // key not found
+  // }
+  return INDEXITERATOR_TYPE(bpm_, page_id, idx);
+}
 
 /**
  * @brief Input parameter is void, construct an index iterator representing the end
@@ -1574,7 +1616,9 @@ auto BPLUSTREE_TYPE::Begin(const KeyType &key) -> INDEXITERATOR_TYPE { UNIMPLEME
  * @return : index iterator
  */
 INDEX_TEMPLATE_ARGUMENTS
-auto BPLUSTREE_TYPE::End() -> INDEXITERATOR_TYPE { UNIMPLEMENTED("TODO(P2): Add implementation."); }
+auto BPLUSTREE_TYPE::End() -> INDEXITERATOR_TYPE {
+  return INDEXITERATOR_TYPE(bpm_, -1, -1);
+}
 
 /**
  * @return Page id of the root of this tree
